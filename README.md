@@ -13,7 +13,7 @@ TextSync 是一个轻量级“文本中转”工具：在服务器上运行一�
 
 ## 项目亮点
 
-- 原生 SwiftUI 客户端：面向 iOS 16 开发，界面流畅，系统集成自然，没有 WebView 套壳。
+- 原生 SwiftUI 客户端：面向 iOS 16 + 开发，界面流畅，系统集成自然，没有 WebView 套壳。
 - 柔和治愈的视觉风格：借鉴动物之森式的温暖配色、圆润卡片和轻松氛围，让工具类 App 也有一点可爱和松弛感。
 - 完全自部署：服务端可以跑在自己的 VPS、家用服务器、NAS 或内网机器上，数据流向清晰可控。
 - 轻量级服务端：Go 编写的单体服务，Docker 一条命令即可启动，资源占用低，冷启动快。
@@ -48,7 +48,7 @@ docker run -d \
 
 ## Features
 
-- Native SwiftUI app for iOS 16
+- Native SwiftUI app for iOS 16 +
 - Warm card-based interface inspired by cozy life-sim UI patterns
 - Self-hosted lightweight relay server
 - Fast text upload, fetch, copy, and paste workflows
