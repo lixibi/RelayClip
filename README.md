@@ -2,6 +2,11 @@
 
 TextSync iOS is a native SwiftUI client for syncing text through a lightweight relay server. It targets iOS 16, stores the server address locally on device, and can work with any reachable TextSync server.
 
+<p>
+  <img src="docs/images/textsync-home.jpg" alt="TextSync latest text screen" width="320">
+  <img src="docs/images/textsync-history.jpg" alt="TextSync history screen" width="320">
+</p>
+
 ## 中文说明
 
 TextSync 是一个轻量级“文本中转”工具：在服务器上运行一个很小的 Docker 服务，然后用 iOS 客户端发送、获取和管理文本。适合公网服务器中转，也可以在局域网或测试环境里使用 HTTP 地址。
@@ -69,3 +74,14 @@ Then point the iOS app at your public HTTPS domain or at `http://IP:17006` for l
 ## GitHub Actions
 
 Push this repository to GitHub, then run the workflow from the Actions tab. It builds an unsigned iOS IPA artifact and publishes the Docker server image.
+
+## 致谢
+
+- UI 设计参考了 [guokaigdg/animal-island-ui](https://github.com/guokaigdg/animal-island-ui) 的温暖、轻量和卡片式表达。
+- iOS 客户端基于 SwiftUI、App Intents 和 Apple 平台能力开发。
+- 服务端使用 Go 构建，并通过 Docker、GHCR 和 GitHub Actions 完成镜像发布与自动构建。
+- 感谢所有相关开源项目和社区文档提供的基础能力与灵感。
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
