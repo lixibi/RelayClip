@@ -3,6 +3,11 @@ DerivedData/
 build/
 *.xcuserstate
 *.ipa
+*.pid
+*.log
+keyserver
+keyserver-static
+hebetext-deploy/
 
 xcuserdata/
 **/xcuserdata/

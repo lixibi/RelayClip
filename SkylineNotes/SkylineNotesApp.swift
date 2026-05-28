@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct SkylineNotesApp: App {
+struct TextSyncApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

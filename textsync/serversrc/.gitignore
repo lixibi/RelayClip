@@ -1,0 +1,13 @@
+# Build artifacts
+/keyserver
+/keyserver-static
+*.tar
+*.tar.gz
+
+# Runtime state
+*.pid
+*.log
+/data/
+
+# Generated deployment bundle
+/hebetext-deploy/

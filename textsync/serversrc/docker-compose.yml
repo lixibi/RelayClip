@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  keyserver:
+    build: .
+    image: hebetext:latest
+    container_name: hebetext
+    ports:
+      - "17006:8080"
+    volumes:
+      - hebetext-data:/data
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+      - KEYSERVER_DATA_FILE=/data/keys.json
+
+volumes:
+  hebetext-data:

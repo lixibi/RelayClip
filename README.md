@@ -1,8 +1,22 @@
-# Skyline Notes
+# TextSync iOS
 
-Skyline Notes is a minimal SwiftUI iOS app targeting iOS 16.
+TextSync iOS is a native SwiftUI client for the HEBE TEXT sharing server. It targets iOS 16 and stores the server address locally on device.
 
-The project is designed to be edited locally and built remotely with GitHub Actions. The workflow produces an unsigned `.ipa` artifact for development devices that can run unsigned apps.
+## Features
+
+- Fetch and display the latest shared text
+- Browse recent history
+- Copy the latest or historical text to the clipboard
+- Paste from the clipboard and upload new text
+- Edit the server address without rebuilding the app
+
+## Server API
+
+The bundled server source lives in `textsync/serversrc`.
+
+- `GET /api/list` returns all entries as JSON
+- `GET /api/get` returns the latest text
+- `POST /api/post` uploads the request body as a new text entry
 
 ## Build IPA on GitHub
 
