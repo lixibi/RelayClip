@@ -1,4 +1,4 @@
-name: Build IPA
+name: TextSync CI
 
 on:
   workflow_dispatch:
@@ -6,8 +6,11 @@ on:
     branches:
       - main
 
+env:
+  DOCKER_IMAGE: ghcr.io/lixibi/textsync-server
+
 jobs:
-  build:
+  build-ios:
     runs-on: macos-latest
 
     steps:
@@ -21,8 +24,8 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild \
-            -project SkylineNotes.xcodeproj \
-            -scheme SkylineNotes \
+            -project TextSync.xcodeproj \
+            -scheme TextSync \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -34,15 +37,45 @@ jobs:
       - name: Package IPA
         run: |
           set -euo pipefail
-          APP_PATH="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Release-iphoneos/SkylineNotes.app" -type d | head -n 1)"
+          APP_PATH="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Release-iphoneos/TextSync.app" -type d | head -n 1)"
           test -n "$APP_PATH"
-          rm -rf Payload SkylineNotes.ipa
+          rm -rf Payload TextSync.ipa
           mkdir Payload
           cp -R "$APP_PATH" Payload/
-          zip -qry SkylineNotes.ipa Payload
+          zip -qry TextSync.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SkylineNotes-ipa
-          path: SkylineNotes.ipa
+          name: TextSync-ipa
+          path: TextSync.ipa
+
+  build-docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish server image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:latest
+            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}

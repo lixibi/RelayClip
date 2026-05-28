@@ -10,4 +10,5 @@
 /data/
 
 # Generated deployment bundle
+/textsync-deploy/
 /hebetext-deploy/

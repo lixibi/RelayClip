@@ -7,16 +7,18 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		3F91D7A12C00100100AA0001 /* SkylineNotesApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F91D7A12C00100100AA0002 /* SkylineNotesApp.swift */; };
+		3F91D7A12C00100100AA0001 /* TextSyncApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F91D7A12C00100100AA0002 /* TextSyncApp.swift */; };
 		3F91D7A12C00100100AA0003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F91D7A12C00100100AA0004 /* ContentView.swift */; };
 		3F91D7A12C00100100AA0005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3F91D7A12C00100100AA0006 /* Assets.xcassets */; };
+		3F91D7A12C00100100AA0022 /* TextSyncIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F91D7A12C00100100AA0023 /* TextSyncIntents.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		3F91D7A12C00100100AA0002 /* SkylineNotesApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkylineNotesApp.swift; sourceTree = "<group>"; };
+		3F91D7A12C00100100AA0002 /* TextSyncApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSyncApp.swift; sourceTree = "<group>"; };
 		3F91D7A12C00100100AA0004 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		3F91D7A12C00100100AA0006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		3F91D7A12C00100100AA0007 /* SkylineNotes.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SkylineNotes.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3F91D7A12C00100100AA0007 /* TextSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TextSync.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3F91D7A12C00100100AA0023 /* TextSyncIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSyncIntents.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -33,25 +35,26 @@
 		3F91D7A12C00100100AA0009 = {
 			isa = PBXGroup;
 			children = (
-				3F91D7A12C00100100AA0010 /* SkylineNotes */,
+				3F91D7A12C00100100AA0010 /* TextSync */,
 				3F91D7A12C00100100AA0011 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		3F91D7A12C00100100AA0010 /* SkylineNotes */ = {
+		3F91D7A12C00100100AA0010 /* TextSync */ = {
 			isa = PBXGroup;
 			children = (
-				3F91D7A12C00100100AA0002 /* SkylineNotesApp.swift */,
+				3F91D7A12C00100100AA0002 /* TextSyncApp.swift */,
 				3F91D7A12C00100100AA0004 /* ContentView.swift */,
+				3F91D7A12C00100100AA0023 /* TextSyncIntents.swift */,
 				3F91D7A12C00100100AA0006 /* Assets.xcassets */,
 			);
-			path = SkylineNotes;
+			path = TextSync;
 			sourceTree = "<group>";
 		};
 		3F91D7A12C00100100AA0011 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				3F91D7A12C00100100AA0007 /* SkylineNotes.app */,
+				3F91D7A12C00100100AA0007 /* TextSync.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -59,9 +62,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		3F91D7A12C00100100AA0012 /* SkylineNotes */ = {
+		3F91D7A12C00100100AA0012 /* TextSync */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 3F91D7A12C00100100AA0013 /* Build configuration list for PBXNativeTarget "SkylineNotes" */;
+			buildConfigurationList = 3F91D7A12C00100100AA0013 /* Build configuration list for PBXNativeTarget "TextSync" */;
 			buildPhases = (
 				3F91D7A12C00100100AA0014 /* Sources */,
 				3F91D7A12C00100100AA0008 /* Frameworks */,
@@ -71,9 +74,9 @@
 			);
 			dependencies = (
 			);
-			name = SkylineNotes;
-			productName = SkylineNotes;
-			productReference = 3F91D7A12C00100100AA0007 /* SkylineNotes.app */;
+			name = TextSync;
+			productName = TextSync;
+			productReference = 3F91D7A12C00100100AA0007 /* TextSync.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -91,7 +94,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 3F91D7A12C00100100AA0017 /* Build configuration list for PBXProject "SkylineNotes" */;
+			buildConfigurationList = 3F91D7A12C00100100AA0017 /* Build configuration list for PBXProject "TextSync" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -104,7 +107,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				3F91D7A12C00100100AA0012 /* SkylineNotes */,
+				3F91D7A12C00100100AA0012 /* TextSync */,
 			);
 		};
 /* End PBXProject section */
@@ -126,7 +129,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				3F91D7A12C00100100AA0003 /* ContentView.swift in Sources */,
-				3F91D7A12C00100100AA0001 /* SkylineNotesApp.swift in Sources */,
+				3F91D7A12C00100100AA0022 /* TextSyncIntents.swift in Sources */,
+				3F91D7A12C00100100AA0001 /* TextSyncApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -271,7 +275,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.lixibi.iosTextSync;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lixibi.textsync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -305,7 +309,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.lixibi.iosTextSync;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lixibi.textsync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -319,7 +323,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		3F91D7A12C00100100AA0017 /* Build configuration list for PBXProject "SkylineNotes" */ = {
+		3F91D7A12C00100100AA0017 /* Build configuration list for PBXProject "TextSync" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3F91D7A12C00100100AA0018 /* Debug */,
@@ -328,7 +332,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		3F91D7A12C00100100AA0013 /* Build configuration list for PBXNativeTarget "SkylineNotes" */ = {
+		3F91D7A12C00100100AA0013 /* Build configuration list for PBXNativeTarget "TextSync" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3F91D7A12C00100100AA0020 /* Debug */,

@@ -1,18 +1,18 @@
 version: '3.8'
 
 services:
-  keyserver:
+  textsync-server:
     build: .
-    image: hebetext:latest
-    container_name: hebetext
+    image: ghcr.io/lixibi/textsync-server:latest
+    container_name: textsync-server
     ports:
       - "17006:8080"
     volumes:
-      - hebetext-data:/data
+      - textsync-data:/data
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
       - KEYSERVER_DATA_FILE=/data/keys.json
 
 volumes:
-  hebetext-data:
+  textsync-data:

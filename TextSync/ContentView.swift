@@ -7,6 +7,28 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
     let id: Int
     let time: Date
     let content: String
+    let isPinned: Bool
+
+    init(id: Int, time: Date, content: String, isPinned: Bool = false) {
+        self.id = id
+        self.time = time
+        self.content = content
+        self.isPinned = isPinned
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case time
+        case content
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        time = try container.decode(Date.self, forKey: .time)
+        content = try container.decode(String.self, forKey: .content)
+        isPinned = false
+    }
 }
 
 enum TextSyncError: LocalizedError {
@@ -131,13 +153,24 @@ final class TextSyncLocalStore {
         content.attributeType = .stringAttributeType
         content.isOptional = false
 
+        let serverAddress = NSAttributeDescription()
+        serverAddress.name = "serverAddress"
+        serverAddress.attributeType = .stringAttributeType
+        serverAddress.isOptional = true
+
         let isDeleted = NSAttributeDescription()
         isDeleted.name = "isDeleted"
         isDeleted.attributeType = .booleanAttributeType
         isDeleted.isOptional = false
         isDeleted.defaultValue = false
 
-        entryEntity.properties = [id, time, content, isDeleted]
+        let isPinned = NSAttributeDescription()
+        isPinned.name = "isPinned"
+        isPinned.attributeType = .booleanAttributeType
+        isPinned.isOptional = false
+        isPinned.defaultValue = false
+
+        entryEntity.properties = [id, time, content, serverAddress, isDeleted, isPinned]
 
         let settingEntity = NSEntityDescription()
         settingEntity.name = "AppSetting"
@@ -175,29 +208,45 @@ final class TextSyncLocalStore {
         }
     }
 
-    func visibleEntries() throws -> [SyncEntry] {
+    func visibleEntries(serverAddress: String) throws -> [SyncEntry] {
         let request = NSFetchRequest<NSManagedObject>(entityName: "CachedEntry")
-        request.predicate = NSPredicate(format: "isDeleted == NO")
+        let serverKey = cacheServerKey(serverAddress)
+        if serverKey.isEmpty {
+            request.predicate = NSPredicate(format: "isDeleted == NO")
+        } else {
+            request.predicate = NSPredicate(format: "isDeleted == NO AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
+        }
         request.sortDescriptors = [NSSortDescriptor(key: "id", ascending: true)]
         return try container.viewContext.fetch(request).compactMap(makeEntry)
     }
 
-    func merge(_ remoteEntries: [SyncEntry]) throws {
+    func merge(_ remoteEntries: [SyncEntry], serverAddress: String) throws {
+        let serverKey = cacheServerKey(serverAddress)
         for entry in remoteEntries {
-            let object = try cachedObject(id: entry.id) ?? NSEntityDescription.insertNewObject(forEntityName: "CachedEntry", into: container.viewContext)
+            let object = try cachedObject(id: entry.id, serverAddress: serverKey) ?? NSEntityDescription.insertNewObject(forEntityName: "CachedEntry", into: container.viewContext)
             object.setValue(Int64(entry.id), forKey: "id")
             object.setValue(entry.time, forKey: "time")
             object.setValue(entry.content, forKey: "content")
+            object.setValue(serverKey, forKey: "serverAddress")
             if object.value(forKey: "isDeleted") == nil {
                 object.setValue(false, forKey: "isDeleted")
+            }
+            if object.value(forKey: "isPinned") == nil {
+                object.setValue(false, forKey: "isPinned")
             }
         }
         try saveIfNeeded()
     }
 
-    func markDeleted(id: Int) throws {
-        guard let object = try cachedObject(id: id) else { return }
+    func markDeleted(id: Int, serverAddress: String) throws {
+        guard let object = try cachedObject(id: id, serverAddress: cacheServerKey(serverAddress)) else { return }
         object.setValue(true, forKey: "isDeleted")
+        try saveIfNeeded()
+    }
+
+    func markPinned(id: Int, serverAddress: String, isPinned: Bool) throws {
+        guard let object = try cachedObject(id: id, serverAddress: cacheServerKey(serverAddress)) else { return }
+        object.setValue(isPinned, forKey: "isPinned")
         try saveIfNeeded()
     }
 
@@ -212,11 +261,22 @@ final class TextSyncLocalStore {
         try saveIfNeeded()
     }
 
-    private func cachedObject(id: Int) throws -> NSManagedObject? {
+    private func cachedObject(id: Int, serverAddress: String) throws -> NSManagedObject? {
         let request = NSFetchRequest<NSManagedObject>(entityName: "CachedEntry")
-        request.predicate = NSPredicate(format: "id == %lld", Int64(id))
+        if serverAddress.isEmpty {
+            request.predicate = NSPredicate(format: "id == %lld", Int64(id))
+        } else {
+            request.predicate = NSPredicate(format: "id == %lld AND (serverAddress == %@ OR serverAddress == nil)", Int64(id), serverAddress)
+        }
         request.fetchLimit = 1
         return try container.viewContext.fetch(request).first
+    }
+
+    private func cacheServerKey(_ address: String) -> String {
+        if let normalized = try? ServerAddress.normalized(address) {
+            return normalized
+        }
+        return address.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func settingValue(forKey key: String) throws -> String {
@@ -237,7 +297,8 @@ final class TextSyncLocalStore {
             return nil
         }
         let id = object.value(forKey: "id") as? Int64 ?? 0
-        return SyncEntry(id: Int(id), time: time, content: content)
+        let isPinned = object.value(forKey: "isPinned") as? Bool ?? false
+        return SyncEntry(id: Int(id), time: time, content: content, isPinned: isPinned)
     }
 
     private func saveIfNeeded() throws {
@@ -277,7 +338,11 @@ final class TextSyncViewModel: ObservableObject {
     }
 
     var history: [SyncEntry] {
-        Array(entries.reversed())
+        Array(entries.filter { !$0.isPinned }.reversed())
+    }
+
+    var pinnedEntries: [SyncEntry] {
+        Array(entries.filter(\.isPinned).reversed())
     }
 
     var visibleHistory: [SyncEntry] {
@@ -290,7 +355,7 @@ final class TextSyncViewModel: ObservableObject {
 
     func loadCachedEntries() {
         do {
-            entries = try localStore.visibleEntries()
+            entries = try localStore.visibleEntries(serverAddress: serverAddress)
             normalizeVisibleCount()
         } catch {
             message = "本地缓存读取失败"
@@ -309,10 +374,10 @@ final class TextSyncViewModel: ObservableObject {
 
         do {
             let remoteEntries = try await service.listEntries(serverAddress: serverAddress)
-            try localStore.merge(remoteEntries)
             serverAddress = try ServerAddress.normalized(serverAddress)
+            try localStore.merge(remoteEntries, serverAddress: serverAddress)
             try localStore.saveServerAddress(serverAddress)
-            entries = try localStore.visibleEntries()
+            entries = try localStore.visibleEntries(serverAddress: serverAddress)
             normalizeVisibleCount()
             message = entries.isEmpty ? "服务器暂无文本" : "已同步最新文本"
         } catch {
@@ -348,12 +413,23 @@ final class TextSyncViewModel: ObservableObject {
 
     func deleteLocal(_ entry: SyncEntry) {
         do {
-            try localStore.markDeleted(id: entry.id)
-            entries = try localStore.visibleEntries()
+            try localStore.markDeleted(id: entry.id, serverAddress: serverAddress)
+            entries = try localStore.visibleEntries(serverAddress: serverAddress)
             normalizeVisibleCount()
             message = "已从本机历史隐藏"
         } catch {
             message = "本地删除失败"
+        }
+    }
+
+    func togglePinned(_ entry: SyncEntry) {
+        do {
+            try localStore.markPinned(id: entry.id, serverAddress: serverAddress, isPinned: !entry.isPinned)
+            entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            normalizeVisibleCount()
+            message = entry.isPinned ? "已取消置顶" : "已置顶"
+        } catch {
+            message = "置顶状态保存失败"
         }
     }
 
@@ -447,10 +523,12 @@ struct ContentView: View {
                     .textSyncListRow()
 
                     HistorySection(
+                        pinnedEntries: viewModel.pinnedEntries,
                         entries: viewModel.visibleHistory,
                         totalCount: viewModel.history.count,
                         canLoadMore: viewModel.canLoadMoreHistory,
                         copyAction: { viewModel.copy($0) },
+                        pinAction: { viewModel.togglePinned($0) },
                         deleteAction: { viewModel.deleteLocal($0) },
                         loadMoreAction: { viewModel.loadMoreHistory() }
                     )
@@ -639,10 +717,12 @@ private struct ComposerView: View {
 }
 
 private struct HistorySection: View {
+    let pinnedEntries: [SyncEntry]
     let entries: [SyncEntry]
     let totalCount: Int
     let canLoadMore: Bool
     let copyAction: (SyncEntry) -> Void
+    let pinAction: (SyncEntry) -> Void
     let deleteAction: (SyncEntry) -> Void
     let loadMoreAction: () -> Void
 
@@ -659,11 +739,15 @@ private struct HistorySection: View {
                     Text("\(entries.count)/\(totalCount)")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(Color.textSyncMuted)
+                } else if !pinnedEntries.isEmpty {
+                    Text("\(pinnedEntries.count) 个置顶")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.textSyncMuted)
                 }
             }
             .textSyncListRow()
 
-            if entries.isEmpty {
+            if entries.isEmpty && pinnedEntries.isEmpty {
                 Text("本机缓存暂无历史，点右上角刷新同步。")
                     .font(.callout)
                     .foregroundStyle(Color.textSyncMuted)
@@ -673,28 +757,12 @@ private struct HistorySection: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     .textSyncListRow()
             } else {
+                ForEach(pinnedEntries) { entry in
+                    historyButton(entry)
+                }
+
                 ForEach(entries) { entry in
-                    Button {
-                        copyAction(entry)
-                    } label: {
-                        HistoryRow(entry: entry)
-                    }
-                    .buttonStyle(.plain)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            deleteAction(entry)
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
-                    }
-                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            deleteAction(entry)
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
-                    }
-                    .textSyncListRow()
+                    historyButton(entry)
                 }
 
                 if canLoadMore {
@@ -708,6 +776,31 @@ private struct HistorySection: View {
             }
         }
     }
+
+    private func historyButton(_ entry: SyncEntry) -> some View {
+        Button {
+            copyAction(entry)
+        } label: {
+            HistoryRow(entry: entry)
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                deleteAction(entry)
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button {
+                pinAction(entry)
+            } label: {
+                Label(entry.isPinned ? "取消置顶" : "置顶", systemImage: entry.isPinned ? "pin.slash" : "pin")
+            }
+            .tint(Color.textSyncTeal)
+        }
+        .textSyncListRow()
+    }
 }
 
 private struct HistoryRow: View {
@@ -716,9 +809,15 @@ private struct HistoryRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("#\(entry.id)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.textSyncTeal)
+                if entry.isPinned {
+                    Label("#\(entry.id)", systemImage: "pin.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.textSyncTeal)
+                } else {
+                    Text("#\(entry.id)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.textSyncTeal)
+                }
 
                 Spacer()
 
