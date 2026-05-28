@@ -130,6 +130,8 @@ final class TextSyncService {
 
 @MainActor
 final class TextSyncLocalStore {
+    static let defaultAppTitle = "文本中转"
+
     private let container: NSPersistentContainer
 
     init() {
@@ -254,10 +256,24 @@ final class TextSyncLocalStore {
         try settingValue(forKey: "serverAddress")
     }
 
+    func appTitle() throws -> String {
+        let title = try settingValue(forKey: "appTitle").trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? Self.defaultAppTitle : title
+    }
+
     func saveServerAddress(_ address: String) throws {
-        let object = try settingObject(key: "serverAddress") ?? NSEntityDescription.insertNewObject(forEntityName: "AppSetting", into: container.viewContext)
-        object.setValue("serverAddress", forKey: "key")
-        object.setValue(address.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "value")
+        try saveSetting(key: "serverAddress", value: address.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func saveAppTitle(_ title: String) throws {
+        let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        try saveSetting(key: "appTitle", value: value.isEmpty ? Self.defaultAppTitle : value)
+    }
+
+    private func saveSetting(key: String, value: String) throws {
+        let object = try settingObject(key: key) ?? NSEntityDescription.insertNewObject(forEntityName: "AppSetting", into: container.viewContext)
+        object.setValue(key, forKey: "key")
+        object.setValue(value, forKey: "value")
         try saveIfNeeded()
     }
 
@@ -315,6 +331,7 @@ final class TextSyncViewModel: ObservableObject {
     private let localStore = TextSyncLocalStore()
 
     @Published var serverAddress = ""
+    @Published var appTitle = TextSyncLocalStore.defaultAppTitle
     @Published var draft = ""
     @Published var entries: [SyncEntry] = []
     @Published var visibleHistoryCount = 10
@@ -328,8 +345,10 @@ final class TextSyncViewModel: ObservableObject {
     init() {
         do {
             serverAddress = try localStore.serverAddress()
+            appTitle = try localStore.appTitle()
         } catch {
             serverAddress = ""
+            appTitle = TextSyncLocalStore.defaultAppTitle
         }
     }
 
@@ -456,13 +475,19 @@ final class TextSyncViewModel: ObservableObject {
         visibleHistoryCount = min(visibleHistoryCount + pageSize, history.count)
     }
 
-    func saveServerAddress() {
+    func saveSettings() {
         do {
-            serverAddress = try ServerAddress.normalized(serverAddress)
-            try localStore.saveServerAddress(serverAddress)
-            message = "服务器地址已保存"
+            try localStore.saveAppTitle(appTitle)
+            appTitle = try localStore.appTitle()
+
+            if !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                serverAddress = try ServerAddress.normalized(serverAddress)
+                try localStore.saveServerAddress(serverAddress)
+            }
+
+            message = "设置已保存"
         } catch {
-            message = "服务器地址保存失败"
+            message = "设置保存失败"
         }
     }
 
@@ -503,7 +528,7 @@ struct ContentView: View {
                 AppBackground()
 
                 List {
-                    HeaderView()
+                    HeaderView(title: viewModel.appTitle)
                         .textSyncListRow()
 
                     LatestTextView(
@@ -567,6 +592,7 @@ struct ContentView: View {
             }
             .sheet(isPresented: $isSettingsPresented) {
                 SettingsView(
+                    appTitle: $viewModel.appTitle,
                     serverAddress: $viewModel.serverAddress,
                     isTestingConnection: viewModel.isTestingConnection,
                     connectionTestMessage: viewModel.connectionTestMessage,
@@ -574,11 +600,11 @@ struct ContentView: View {
                 ) {
                     Task { await viewModel.testConnection() }
                 } saveAction: {
-                    viewModel.saveServerAddress()
+                    viewModel.saveSettings()
                     isSettingsPresented = false
                     Task { await viewModel.refresh() }
                 }
-                .presentationDetents([.medium])
+                .presentationDetents([.medium, .large])
             }
             .overlay(alignment: .bottom) {
                 if let message = viewModel.message {
@@ -598,9 +624,11 @@ struct ContentView: View {
 }
 
 private struct HeaderView: View {
+    let title: String
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("喜碧文本中转", systemImage: "bolt.horizontal.circle.fill")
+            Label(title, systemImage: "bolt.horizontal.circle.fill")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(Color.textSyncBrown)
 
@@ -843,6 +871,7 @@ private struct HistoryRow: View {
 }
 
 private struct SettingsView: View {
+    @Binding var appTitle: String
     @Binding var serverAddress: String
     let isTestingConnection: Bool
     let connectionTestMessage: String?
@@ -853,6 +882,23 @@ private struct SettingsView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
+                Text("首页名称")
+                    .font(.headline)
+                    .foregroundStyle(Color.textSyncBrown)
+
+                TextField("文本中转", text: $appTitle)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.callout)
+                    .padding(.horizontal, 12)
+                    .frame(height: 46)
+                    .background(Color.textSyncPaper)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.textSyncLine, lineWidth: 1)
+                    )
+
                 Text("服务器地址")
                     .font(.headline)
                     .foregroundStyle(Color.textSyncBrown)

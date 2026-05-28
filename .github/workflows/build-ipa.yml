@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -36,6 +38,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             build
 
       - name: Package IPA
@@ -60,15 +63,43 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="latest-ipa"
-          git tag -f "$tag" "$GITHUB_SHA"
-          git push -f origin "refs/tags/$tag"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --title "Latest TextSync IPA" --notes "Latest unsigned TextSync IPA from main."
+          app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Release-iphoneos/TextSync.app" -type d | head -n 1)"
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Info.plist")"
+          build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_path/Info.plist")"
+          version_tag="ios-v${version}-${build}"
+          latest_tag="latest-ipa"
+          previous_tag="$(git describe --tags --match 'ios-v*' --abbrev=0 HEAD^ 2>/dev/null || true)"
+
+          {
+            echo "版本：${version} (${build})"
+            echo
+            echo "更新说明："
+            if [ -n "$previous_tag" ]; then
+              git log --pretty='- %s (%h)' "${previous_tag}..HEAD"
+            else
+              git log -1 --pretty='- %s (%h)'
+            fi
+            echo
+            echo "提交：${GITHUB_SHA}"
+          } > RELEASE_NOTES.md
+
+          git tag -f "$version_tag" "$GITHUB_SHA"
+          git tag -f "$latest_tag" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$version_tag" "refs/tags/$latest_tag"
+
+          if gh release view "$version_tag" >/dev/null 2>&1; then
+            gh release edit "$version_tag" --title "TextSync ${version} (${build})" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$tag" --title "Latest TextSync IPA" --notes "Latest unsigned TextSync IPA from main."
+            gh release create "$version_tag" --title "TextSync ${version} (${build})" --notes-file RELEASE_NOTES.md
           fi
-          gh release upload "$tag" TextSync.ipa --clobber
+          gh release upload "$version_tag" TextSync.ipa --clobber
+
+          if gh release view "$latest_tag" >/dev/null 2>&1; then
+            gh release edit "$latest_tag" --title "Latest TextSync IPA" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$latest_tag" --title "Latest TextSync IPA" --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$latest_tag" TextSync.ipa --clobber
 
   build-docker:
     runs-on: ubuntu-latest
