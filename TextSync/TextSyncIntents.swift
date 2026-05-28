@@ -8,9 +8,7 @@ struct UploadClipboardTextIntent: AppIntent {
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let text = await MainActor.run {
-            UIPasteboard.general.string ?? ""
-        }
+        let text = await Self.clipboardText()
 
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .result(dialog: "剪贴板没有可上传的文本")
@@ -26,6 +24,19 @@ struct UploadClipboardTextIntent: AppIntent {
 
         try await TextSyncService().post(text, serverAddress: serverAddress)
         return .result(dialog: "已上传剪贴板文本")
+    }
+
+    private static func clipboardText() async -> String {
+        for attempt in 0..<8 {
+            let text = await MainActor.run {
+                UIPasteboard.general.string ?? ""
+            }
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attempt == 7 {
+                return text
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        return ""
     }
 }
 
@@ -50,7 +61,7 @@ struct FetchRemoteTextIntent: AppIntent {
 
         try await MainActor.run {
             let store = TextSyncLocalStore()
-            try store.merge(entries, serverAddress: serverAddress)
+            try store.merge(entries, serverAddress: serverAddress, preserveLocalEdits: true)
             UIPasteboard.general.string = latest.content
         }
 

@@ -8,12 +8,14 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
     let time: Date
     let content: String
     let isPinned: Bool
+    let isLocallyEdited: Bool
 
-    init(id: Int, time: Date, content: String, isPinned: Bool = false) {
+    init(id: Int, time: Date, content: String, isPinned: Bool = false, isLocallyEdited: Bool = false) {
         self.id = id
         self.time = time
         self.content = content
         self.isPinned = isPinned
+        self.isLocallyEdited = isLocallyEdited
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -28,6 +30,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         time = try container.decode(Date.self, forKey: .time)
         content = try container.decode(String.self, forKey: .content)
         isPinned = false
+        isLocallyEdited = false
     }
 }
 
@@ -172,7 +175,13 @@ final class TextSyncLocalStore {
         isPinned.isOptional = false
         isPinned.defaultValue = false
 
-        entryEntity.properties = [id, time, content, serverAddress, isDeleted, isPinned]
+        let isLocallyEdited = NSAttributeDescription()
+        isLocallyEdited.name = "isLocallyEdited"
+        isLocallyEdited.attributeType = .booleanAttributeType
+        isLocallyEdited.isOptional = false
+        isLocallyEdited.defaultValue = false
+
+        entryEntity.properties = [id, time, content, serverAddress, isDeleted, isPinned, isLocallyEdited]
 
         let settingEntity = NSEntityDescription()
         settingEntity.name = "AppSetting"
@@ -222,19 +231,26 @@ final class TextSyncLocalStore {
         return try container.viewContext.fetch(request).compactMap(makeEntry)
     }
 
-    func merge(_ remoteEntries: [SyncEntry], serverAddress: String) throws {
+    func merge(_ remoteEntries: [SyncEntry], serverAddress: String, preserveLocalEdits: Bool) throws {
         let serverKey = cacheServerKey(serverAddress)
         for entry in remoteEntries {
             let object = try cachedObject(id: entry.id, serverAddress: serverKey) ?? NSEntityDescription.insertNewObject(forEntityName: "CachedEntry", into: container.viewContext)
+            let shouldKeepLocalContent = preserveLocalEdits && (object.value(forKey: "isLocallyEdited") as? Bool ?? false)
             object.setValue(Int64(entry.id), forKey: "id")
-            object.setValue(entry.time, forKey: "time")
-            object.setValue(entry.content, forKey: "content")
+            if !shouldKeepLocalContent {
+                object.setValue(entry.time, forKey: "time")
+                object.setValue(entry.content, forKey: "content")
+                object.setValue(false, forKey: "isLocallyEdited")
+            }
             object.setValue(serverKey, forKey: "serverAddress")
             if object.value(forKey: "isDeleted") == nil {
                 object.setValue(false, forKey: "isDeleted")
             }
             if object.value(forKey: "isPinned") == nil {
                 object.setValue(false, forKey: "isPinned")
+            }
+            if object.value(forKey: "isLocallyEdited") == nil {
+                object.setValue(false, forKey: "isLocallyEdited")
             }
         }
         try saveIfNeeded()
@@ -249,6 +265,13 @@ final class TextSyncLocalStore {
     func markPinned(id: Int, serverAddress: String, isPinned: Bool) throws {
         guard let object = try cachedObject(id: id, serverAddress: cacheServerKey(serverAddress)) else { return }
         object.setValue(isPinned, forKey: "isPinned")
+        try saveIfNeeded()
+    }
+
+    func saveLocalContent(id: Int, serverAddress: String, content: String) throws {
+        guard let object = try cachedObject(id: id, serverAddress: cacheServerKey(serverAddress)) else { return }
+        object.setValue(content, forKey: "content")
+        object.setValue(true, forKey: "isLocallyEdited")
         try saveIfNeeded()
     }
 
@@ -314,7 +337,8 @@ final class TextSyncLocalStore {
         }
         let id = object.value(forKey: "id") as? Int64 ?? 0
         let isPinned = object.value(forKey: "isPinned") as? Bool ?? false
-        return SyncEntry(id: Int(id), time: time, content: content, isPinned: isPinned)
+        let isLocallyEdited = object.value(forKey: "isLocallyEdited") as? Bool ?? false
+        return SyncEntry(id: Int(id), time: time, content: content, isPinned: isPinned, isLocallyEdited: isLocallyEdited)
     }
 
     private func saveIfNeeded() throws {
@@ -333,6 +357,7 @@ final class TextSyncViewModel: ObservableObject {
     @Published var serverAddress = ""
     @Published var appTitle = TextSyncLocalStore.defaultAppTitle
     @Published var draft = ""
+    @Published var latestDraft = ""
     @Published var entries: [SyncEntry] = []
     @Published var visibleHistoryCount = 10
     @Published var isLoading = false
@@ -375,13 +400,14 @@ final class TextSyncViewModel: ObservableObject {
     func loadCachedEntries() {
         do {
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            syncLatestDraft()
             normalizeVisibleCount()
         } catch {
             message = "本地缓存读取失败"
         }
     }
 
-    func refresh() async {
+    func refresh(allowOverwriteLocalEdits: Bool = true) async {
         guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             loadCachedEntries()
             message = "请先设置服务器地址"
@@ -394,9 +420,10 @@ final class TextSyncViewModel: ObservableObject {
         do {
             let remoteEntries = try await service.listEntries(serverAddress: serverAddress)
             serverAddress = try ServerAddress.normalized(serverAddress)
-            try localStore.merge(remoteEntries, serverAddress: serverAddress)
+            try localStore.merge(remoteEntries, serverAddress: serverAddress, preserveLocalEdits: !allowOverwriteLocalEdits)
             try localStore.saveServerAddress(serverAddress)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            syncLatestDraft()
             normalizeVisibleCount()
             message = entries.isEmpty ? "服务器暂无文本" : "已同步最新文本"
         } catch {
@@ -434,6 +461,7 @@ final class TextSyncViewModel: ObservableObject {
         do {
             try localStore.markDeleted(id: entry.id, serverAddress: serverAddress)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            syncLatestDraft()
             normalizeVisibleCount()
             message = "已从本机历史隐藏"
         } catch {
@@ -445,6 +473,7 @@ final class TextSyncViewModel: ObservableObject {
         do {
             try localStore.markPinned(id: entry.id, serverAddress: serverAddress, isPinned: !entry.isPinned)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            syncLatestDraft()
             normalizeVisibleCount()
             message = entry.isPinned ? "已取消置顶" : "已置顶"
         } catch {
@@ -458,7 +487,8 @@ final class TextSyncViewModel: ObservableObject {
     }
 
     func copyLatest() {
-        guard let content = latest?.content, !content.isEmpty else {
+        let content = latestDraft.isEmpty ? latest?.content ?? "" : latestDraft
+        guard !content.isEmpty else {
             message = "没有可复制的文本"
             return
         }
@@ -469,6 +499,18 @@ final class TextSyncViewModel: ObservableObject {
     func copy(_ entry: SyncEntry) {
         UIPasteboard.general.string = entry.content
         message = "已复制历史文本"
+    }
+
+    func updateLatestDraft(_ content: String) {
+        latestDraft = content
+        guard let latest else { return }
+
+        do {
+            try localStore.saveLocalContent(id: latest.id, serverAddress: serverAddress, content: content)
+            entries = try localStore.visibleEntries(serverAddress: serverAddress)
+        } catch {
+            message = "本地编辑保存失败"
+        }
     }
 
     func loadMoreHistory() {
@@ -516,6 +558,10 @@ final class TextSyncViewModel: ObservableObject {
     private func normalizeVisibleCount() {
         visibleHistoryCount = min(max(visibleHistoryCount, pageSize), history.count)
     }
+
+    private func syncLatestDraft() {
+        latestDraft = latest?.content ?? ""
+    }
 }
 
 struct ContentView: View {
@@ -533,6 +579,10 @@ struct ContentView: View {
 
                     LatestTextView(
                         entry: viewModel.latest,
+                        text: Binding(
+                            get: { viewModel.latestDraft },
+                            set: { viewModel.updateLatestDraft($0) }
+                        ),
                         isLoading: viewModel.isLoading,
                         copyAction: { viewModel.copyLatest() }
                     )
@@ -561,7 +611,7 @@ struct ContentView: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .refreshable {
-                    await viewModel.refresh()
+                    await viewModel.refresh(allowOverwriteLocalEdits: true)
                 }
             }
             .navigationTitle("")
@@ -576,7 +626,7 @@ struct ContentView: View {
                     .accessibilityLabel("服务器设置")
 
                     Button {
-                        Task { await viewModel.refresh() }
+                        Task { await viewModel.refresh(allowOverwriteLocalEdits: true) }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -586,9 +636,7 @@ struct ContentView: View {
             }
             .task {
                 viewModel.loadCachedEntries()
-                if viewModel.entries.isEmpty {
-                    await viewModel.refresh()
-                }
+                await viewModel.refresh(allowOverwriteLocalEdits: false)
             }
             .sheet(isPresented: $isSettingsPresented) {
                 SettingsView(
@@ -602,7 +650,7 @@ struct ContentView: View {
                 } saveAction: {
                     viewModel.saveSettings()
                     isSettingsPresented = false
-                    Task { await viewModel.refresh() }
+                    Task { await viewModel.refresh(allowOverwriteLocalEdits: false) }
                 }
                 .presentationDetents([.medium, .large])
             }
@@ -641,6 +689,7 @@ private struct HeaderView: View {
 
 private struct LatestTextView: View {
     let entry: SyncEntry?
+    @Binding var text: String
     let isLoading: Bool
     let copyAction: () -> Void
 
@@ -653,25 +702,34 @@ private struct LatestTextView: View {
 
                 Spacer()
 
-                if let entry {
-                    Text(entry.time.textSyncFormatted)
-                        .font(.caption)
-                        .foregroundStyle(Color.textSyncMuted)
+                VStack(alignment: .trailing, spacing: 2) {
+                    if entry?.isLocallyEdited == true {
+                        Text("本地已改")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Color.textSyncWarning)
+                    }
+
+                    if let entry {
+                        Text(entry.time.textSyncFormatted)
+                            .font(.caption)
+                            .foregroundStyle(Color.textSyncMuted)
+                    }
                 }
             }
 
-            Text(displayText)
+            TextEditor(text: editableText)
+                .scrollContentBackground(.hidden)
                 .font(.body)
                 .foregroundStyle(Color.textSyncBrown)
                 .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
-                .padding(14)
+                .padding(10)
                 .background(Color.textSyncPaper)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
                         .stroke(Color.textSyncLine, lineWidth: 1)
                 )
-                .textSelection(.enabled)
+                .disabled(entry == nil)
 
             Button(action: copyAction) {
                 Label("复制最新文本", systemImage: "doc.on.doc.fill")
@@ -684,11 +742,23 @@ private struct LatestTextView: View {
         .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
     }
 
+    private var editableText: Binding<String> {
+        Binding(
+            get: {
+                if entry == nil {
+                    return displayText
+                }
+                return text
+            },
+            set: { text = $0 }
+        )
+    }
+
     private var displayText: String {
         if isLoading && entry == nil {
             return "正在同步..."
         }
-        return entry?.content ?? "暂无数据"
+        return "暂无数据"
     }
 }
 
