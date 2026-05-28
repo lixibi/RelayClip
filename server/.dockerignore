@@ -1,0 +1,9 @@
+keyserver
+keyserver-static
+*.tar
+*.tar.gz
+*.pid
+*.log
+data/
+textsync-deploy/
+hebetext-deploy/

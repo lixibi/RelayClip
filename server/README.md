@@ -1,4 +1,4 @@
-# TextSync Server
+# 文本中转服务器 (TextSync Server)
 
 一个极简的文本中转服务，可搭配 TextSync iOS 客户端实现跨设备文本同步。
 
