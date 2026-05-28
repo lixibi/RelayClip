@@ -2,6 +2,33 @@
 
 TextSync iOS is a native SwiftUI client for syncing text through a lightweight relay server. It targets iOS 16, stores the server address locally on device, and can work with any reachable TextSync server.
 
+## 中文说明
+
+TextSync 是一个轻量级“文本中转”工具：在服务器上运行一个很小的 Docker 服务，然后用 iOS 客户端发送、获取和管理文本。适合公网服务器中转，也可以在局域网或测试环境里使用 HTTP 地址。
+
+常用入口：
+
+- iOS 安装包：查看 [最新 IPA Release](https://github.com/lixibi/iosTextSync/releases/tag/latest-ipa)
+- Docker 镜像：`docker pull ghcr.io/lixibi/textsync-server:latest`
+- 服务端说明：查看 [server/README.md](server/README.md)
+- 自动构建：查看 [GitHub Actions](https://github.com/lixibi/iosTextSync/actions)
+
+快速部署服务端：
+
+```bash
+docker pull ghcr.io/lixibi/textsync-server:latest
+docker volume create textsync-data
+docker run -d \
+  --name textsync-server \
+  --restart unless-stopped \
+  -p 17006:8080 \
+  -v textsync-data:/data \
+  -e KEYSERVER_DATA_FILE=/data/keys.json \
+  ghcr.io/lixibi/textsync-server:latest
+```
+
+部署完成后，在 iOS App 的设置里填写你的服务器地址即可。推荐使用 HTTPS 公网域名；测试时也允许使用 `http://IP:17006`。
+
 ## Features
 
 - Fetch and display the latest shared text
