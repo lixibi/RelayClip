@@ -1117,10 +1117,38 @@ private struct HistorySection: View {
             .onTapGesture {
                 copyAction(entry)
             }
-            .onLongPressGesture(minimumDuration: 0.45) {
-                editAction(entry)
+            .contextMenu {
+                Button {
+                    copyAction(entry)
+                } label: {
+                    Label("复制", systemImage: "doc.on.doc.fill")
+                }
+
+                Button {
+                    editAction(entry)
+                } label: {
+                    Label("编辑本地文本", systemImage: "pencil.circle.fill")
+                }
+
+                Button {
+                    pinAction(entry)
+                } label: {
+                    Label(entry.isPinned ? "取消置顶" : "置顶", systemImage: entry.isPinned ? "pin.slash" : "pin.fill")
+                }
+
+                Button(role: .destructive) {
+                    hideAction(entry)
+                } label: {
+                    Label("隐藏", systemImage: "eye.slash")
+                }
             }
             .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: "复制") {
+                copyAction(entry)
+            }
+            .accessibilityAction(named: "编辑本地文本") {
+                editAction(entry)
+            }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
                 hideAction(entry)
