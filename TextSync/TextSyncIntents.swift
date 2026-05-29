@@ -4,14 +4,25 @@ import UIKit
 
 struct UploadClipboardTextIntent: AppIntent {
     static var title: LocalizedStringResource = "上传剪贴板文本"
-    static var description = IntentDescription("将当前剪贴板文本上传到已保存的 TextSync 服务器。")
+    static var description = IntentDescription("将快捷指令传入的文本或当前剪贴板文本上传到已保存的 TextSync 服务器。")
     static var openAppWhenRun = false
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
-        let text = await Self.clipboardText()
+    @Parameter(title: "文本", description: "可从快捷指令的“获取剪贴板”动作传入。留空时会尝试直接读取当前剪贴板。")
+    var text: String?
 
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .result(dialog: "剪贴板没有可上传的文本")
+    init() {
+        text = nil
+    }
+
+    init(text: String?) {
+        self.text = text
+    }
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let content = await Self.resolvedText(from: text)
+
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .result(dialog: "没有可上传的文本。建议在快捷指令里先添加“获取剪贴板”，再把结果传给 TextSync。")
         }
 
         let serverAddress = try await MainActor.run {
@@ -22,8 +33,16 @@ struct UploadClipboardTextIntent: AppIntent {
             return .result(dialog: "请先在 TextSync 中设置服务器地址")
         }
 
-        try await TextSyncService().post(text, serverAddress: serverAddress)
-        return .result(dialog: "已上传剪贴板文本")
+        try await TextSyncService().post(content, serverAddress: serverAddress)
+        return .result(dialog: "已上传文本")
+    }
+
+    private static func resolvedText(from parameterText: String?) async -> String {
+        let trimmedParameter = parameterText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedParameter.isEmpty {
+            return parameterText ?? ""
+        }
+        return await clipboardText()
     }
 
     private static func clipboardText() async -> String {

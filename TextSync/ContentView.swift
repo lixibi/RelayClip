@@ -9,13 +9,15 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
     let content: String
     let isPinned: Bool
     let isLocallyEdited: Bool
+    let isHidden: Bool
 
-    init(id: Int, time: Date, content: String, isPinned: Bool = false, isLocallyEdited: Bool = false) {
+    init(id: Int, time: Date, content: String, isPinned: Bool = false, isLocallyEdited: Bool = false, isHidden: Bool = false) {
         self.id = id
         self.time = time
         self.content = content
         self.isPinned = isPinned
         self.isLocallyEdited = isLocallyEdited
+        self.isHidden = isHidden
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -31,6 +33,38 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         content = try container.decode(String.self, forKey: .content)
         isPinned = false
         isLocallyEdited = false
+        isHidden = false
+    }
+}
+
+struct HiddenEntryRange: Identifiable, Equatable {
+    let startID: Int
+    let endID: Int
+    let count: Int
+
+    var id: String {
+        "\(startID)-\(endID)-\(count)"
+    }
+
+    var title: String {
+        if startID == endID {
+            return "已隐藏 #\(startID)"
+        }
+        return "已隐藏 #\(startID)-#\(endID)"
+    }
+}
+
+enum HistoryListItem: Identifiable, Equatable {
+    case entry(SyncEntry)
+    case hiddenRange(HiddenEntryRange)
+
+    var id: String {
+        switch self {
+        case .entry(let entry):
+            return "entry-\(entry.id)"
+        case .hiddenRange(let range):
+            return "hidden-\(range.id)"
+        }
     }
 }
 
@@ -220,12 +254,30 @@ final class TextSyncLocalStore {
     }
 
     func visibleEntries(serverAddress: String) throws -> [SyncEntry] {
+        try entries(serverAddress: serverAddress, includeHidden: false)
+    }
+
+    func hiddenEntries(serverAddress: String) throws -> [SyncEntry] {
         let request = NSFetchRequest<NSManagedObject>(entityName: "CachedEntry")
         let serverKey = cacheServerKey(serverAddress)
         if serverKey.isEmpty {
-            request.predicate = NSPredicate(format: "isDeleted == NO")
+            request.predicate = NSPredicate(format: "isDeleted == YES")
         } else {
-            request.predicate = NSPredicate(format: "isDeleted == NO AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
+            request.predicate = NSPredicate(format: "isDeleted == YES AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
+        }
+        request.sortDescriptors = [NSSortDescriptor(key: "id", ascending: true)]
+        return try container.viewContext.fetch(request).compactMap(makeEntry)
+    }
+
+    private func entries(serverAddress: String, includeHidden: Bool) throws -> [SyncEntry] {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "CachedEntry")
+        let serverKey = cacheServerKey(serverAddress)
+        if serverKey.isEmpty {
+            request.predicate = includeHidden ? nil : NSPredicate(format: "isDeleted == NO")
+        } else {
+            request.predicate = includeHidden
+                ? NSPredicate(format: "serverAddress == %@ OR serverAddress == nil", serverKey)
+                : NSPredicate(format: "isDeleted == NO AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
         }
         request.sortDescriptors = [NSSortDescriptor(key: "id", ascending: true)]
         return try container.viewContext.fetch(request).compactMap(makeEntry)
@@ -256,9 +308,29 @@ final class TextSyncLocalStore {
         try saveIfNeeded()
     }
 
-    func markDeleted(id: Int, serverAddress: String) throws {
+    func markHidden(id: Int, serverAddress: String, isHidden: Bool) throws {
         guard let object = try cachedObject(id: id, serverAddress: cacheServerKey(serverAddress)) else { return }
-        object.setValue(true, forKey: "isDeleted")
+        object.setValue(isHidden, forKey: "isDeleted")
+        try saveIfNeeded()
+    }
+
+    func restoreHiddenEntries(ids: [Int], serverAddress: String) throws {
+        for id in ids {
+            try markHidden(id: id, serverAddress: serverAddress, isHidden: false)
+        }
+    }
+
+    func resetCachedEntries(serverAddress: String) throws {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "CachedEntry")
+        let serverKey = cacheServerKey(serverAddress)
+        if !serverKey.isEmpty {
+            request.predicate = NSPredicate(format: "serverAddress == %@ OR serverAddress == nil", serverKey)
+        }
+
+        let objects = try container.viewContext.fetch(request)
+        for object in objects {
+            container.viewContext.delete(object)
+        }
         try saveIfNeeded()
     }
 
@@ -338,7 +410,8 @@ final class TextSyncLocalStore {
         let id = object.value(forKey: "id") as? Int64 ?? 0
         let isPinned = object.value(forKey: "isPinned") as? Bool ?? false
         let isLocallyEdited = object.value(forKey: "isLocallyEdited") as? Bool ?? false
-        return SyncEntry(id: Int(id), time: time, content: content, isPinned: isPinned, isLocallyEdited: isLocallyEdited)
+        let isHidden = object.value(forKey: "isDeleted") as? Bool ?? false
+        return SyncEntry(id: Int(id), time: time, content: content, isPinned: isPinned, isLocallyEdited: isLocallyEdited, isHidden: isHidden)
     }
 
     private func saveIfNeeded() throws {
@@ -359,6 +432,7 @@ final class TextSyncViewModel: ObservableObject {
     @Published var draft = ""
     @Published var latestDraft = ""
     @Published var entries: [SyncEntry] = []
+    @Published var hiddenEntries: [SyncEntry] = []
     @Published var visibleHistoryCount = 10
     @Published var isLoading = false
     @Published var isSending = false
@@ -393,6 +467,14 @@ final class TextSyncViewModel: ObservableObject {
         Array(history.prefix(visibleHistoryCount))
     }
 
+    var hiddenHistory: [SyncEntry] {
+        Array(hiddenEntries.filter { !$0.isPinned }.reversed())
+    }
+
+    var visibleHistoryItems: [HistoryListItem] {
+        makeHistoryItems(visibleEntries: visibleHistory, hiddenEntries: hiddenHistory)
+    }
+
     var canLoadMoreHistory: Bool {
         visibleHistoryCount < history.count
     }
@@ -400,6 +482,7 @@ final class TextSyncViewModel: ObservableObject {
     func loadCachedEntries() {
         do {
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
         } catch {
@@ -423,6 +506,7 @@ final class TextSyncViewModel: ObservableObject {
             try localStore.merge(remoteEntries, serverAddress: serverAddress, preserveLocalEdits: !allowOverwriteLocalEdits)
             try localStore.saveServerAddress(serverAddress)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
             message = entries.isEmpty ? "服务器暂无文本" : "已同步最新文本"
@@ -457,15 +541,32 @@ final class TextSyncViewModel: ObservableObject {
         }
     }
 
-    func deleteLocal(_ entry: SyncEntry) {
+    func hideLocal(_ entry: SyncEntry) {
         do {
-            try localStore.markDeleted(id: entry.id, serverAddress: serverAddress)
+            try localStore.markHidden(id: entry.id, serverAddress: serverAddress, isHidden: true)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
             message = "已从本机历史隐藏"
         } catch {
-            message = "本地删除失败"
+            message = "本地隐藏失败"
+        }
+    }
+
+    func restoreHidden(_ range: HiddenEntryRange) {
+        do {
+            let ids = hiddenEntries
+                .map(\.id)
+                .filter { range.startID...range.endID ~= $0 }
+            try localStore.restoreHiddenEntries(ids: ids, serverAddress: serverAddress)
+            entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            syncLatestDraft()
+            normalizeVisibleCount()
+            message = ids.count > 1 ? "已显示 \(ids.count) 条隐藏记录" : "已显示隐藏记录"
+        } catch {
+            message = "恢复隐藏记录失败"
         }
     }
 
@@ -473,6 +574,7 @@ final class TextSyncViewModel: ObservableObject {
         do {
             try localStore.markPinned(id: entry.id, serverAddress: serverAddress, isPinned: !entry.isPinned)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
             message = entry.isPinned ? "已取消置顶" : "已置顶"
@@ -508,6 +610,7 @@ final class TextSyncViewModel: ObservableObject {
         do {
             try localStore.saveLocalContent(id: latest.id, serverAddress: serverAddress, content: content)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
         } catch {
             message = "本地编辑保存失败"
         }
@@ -530,6 +633,19 @@ final class TextSyncViewModel: ObservableObject {
             message = "设置已保存"
         } catch {
             message = "设置保存失败"
+        }
+    }
+
+    func resetLocalData() {
+        do {
+            try localStore.resetCachedEntries(serverAddress: serverAddress)
+            entries = []
+            hiddenEntries = []
+            latestDraft = ""
+            visibleHistoryCount = pageSize
+            message = "本地数据已重置"
+        } catch {
+            message = "本地数据重置失败"
         }
     }
 
@@ -561,6 +677,67 @@ final class TextSyncViewModel: ObservableObject {
 
     private func syncLatestDraft() {
         latestDraft = latest?.content ?? ""
+    }
+
+    private func makeHistoryItems(visibleEntries: [SyncEntry], hiddenEntries: [SyncEntry]) -> [HistoryListItem] {
+        guard !visibleEntries.isEmpty else {
+            return hiddenRanges(from: hiddenEntries.map(\.id)).map(HistoryListItem.hiddenRange)
+        }
+
+        let visibleIDs = visibleEntries.map(\.id)
+        let hiddenIDs = Set(hiddenEntries.map(\.id))
+        var items: [HistoryListItem] = []
+
+        if let firstID = visibleIDs.first {
+            appendHiddenRange(
+                ids: hiddenIDs.filter { $0 > firstID },
+                to: &items
+            )
+        }
+
+        for index in visibleEntries.indices {
+            let entry = visibleEntries[index]
+            items.append(.entry(entry))
+
+            let lowerBound = index + 1 < visibleEntries.count ? visibleEntries[index + 1].id : Int.min
+            appendHiddenRange(
+                ids: hiddenIDs.filter { $0 < entry.id && $0 > lowerBound },
+                to: &items
+            )
+        }
+
+        return items
+    }
+
+    private func appendHiddenRange(ids: [Int], to items: inout [HistoryListItem]) {
+        for range in hiddenRanges(from: ids) {
+            items.append(.hiddenRange(range))
+        }
+    }
+
+    private func hiddenRanges(from ids: [Int]) -> [HiddenEntryRange] {
+        let sortedIDs = ids.sorted(by: >)
+        guard let first = sortedIDs.first else { return [] }
+
+        var ranges: [HiddenEntryRange] = []
+        var startID = first
+        var endID = first
+        var count = 1
+
+        for id in sortedIDs.dropFirst() {
+            if id == endID - 1 {
+                endID = id
+                count += 1
+            } else {
+                ranges.append(HiddenEntryRange(startID: endID, endID: startID, count: count))
+                startID = id
+                endID = id
+                count = 1
+            }
+        }
+
+        ranges.append(HiddenEntryRange(startID: endID, endID: startID, count: count))
+        return ranges
     }
 }
 
@@ -599,12 +776,15 @@ struct ContentView: View {
 
                     HistorySection(
                         pinnedEntries: viewModel.pinnedEntries,
-                        entries: viewModel.visibleHistory,
+                        items: viewModel.visibleHistoryItems,
                         totalCount: viewModel.history.count,
+                        hiddenCount: viewModel.hiddenHistory.count,
+                        latestID: viewModel.latest?.id,
                         canLoadMore: viewModel.canLoadMoreHistory,
                         copyAction: { viewModel.copy($0) },
                         pinAction: { viewModel.togglePinned($0) },
-                        deleteAction: { viewModel.deleteLocal($0) },
+                        hideAction: { viewModel.hideLocal($0) },
+                        restoreHiddenAction: { viewModel.restoreHidden($0) },
                         loadMoreAction: { viewModel.loadMoreHistory() }
                     )
                 }
@@ -651,6 +831,8 @@ struct ContentView: View {
                     viewModel.saveSettings()
                     isSettingsPresented = false
                     Task { await viewModel.refresh(allowOverwriteLocalEdits: false) }
+                } resetLocalDataAction: {
+                    viewModel.resetLocalData()
                 }
                 .presentationDetents([.medium, .large])
             }
@@ -816,12 +998,15 @@ private struct ComposerView: View {
 
 private struct HistorySection: View {
     let pinnedEntries: [SyncEntry]
-    let entries: [SyncEntry]
+    let items: [HistoryListItem]
     let totalCount: Int
+    let hiddenCount: Int
+    let latestID: Int?
     let canLoadMore: Bool
     let copyAction: (SyncEntry) -> Void
     let pinAction: (SyncEntry) -> Void
-    let deleteAction: (SyncEntry) -> Void
+    let hideAction: (SyncEntry) -> Void
+    let restoreHiddenAction: (HiddenEntryRange) -> Void
     let loadMoreAction: () -> Void
 
     var body: some View {
@@ -834,9 +1019,16 @@ private struct HistorySection: View {
                 Spacer()
 
                 if totalCount > 0 {
-                    Text("\(entries.count)/\(totalCount)")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Color.textSyncMuted)
+                    HStack(spacing: 6) {
+                        if hiddenCount > 0 {
+                            Label("\(hiddenCount)", systemImage: "eye.slash")
+                                .labelStyle(.titleAndIcon)
+                        }
+
+                        Text("\(entryCount)/\(totalCount)")
+                    }
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.textSyncMuted)
                 } else if !pinnedEntries.isEmpty {
                     Text("\(pinnedEntries.count) 个置顶")
                         .font(.caption.weight(.bold))
@@ -845,7 +1037,7 @@ private struct HistorySection: View {
             }
             .textSyncListRow()
 
-            if entries.isEmpty && pinnedEntries.isEmpty {
+            if items.isEmpty && pinnedEntries.isEmpty {
                 Text("本机缓存暂无历史，点右上角刷新同步。")
                     .font(.callout)
                     .foregroundStyle(Color.textSyncMuted)
@@ -859,8 +1051,14 @@ private struct HistorySection: View {
                     historyButton(entry)
                 }
 
-                ForEach(entries) { entry in
-                    historyButton(entry)
+                ForEach(items) { item in
+                    switch item {
+                    case .entry(let entry):
+                        historyButton(entry)
+                    case .hiddenRange(let range):
+                        HiddenRangeButton(range: range, restoreAction: restoreHiddenAction)
+                            .textSyncListRow()
+                    }
                 }
 
                 if canLoadMore {
@@ -875,18 +1073,27 @@ private struct HistorySection: View {
         }
     }
 
+    private var entryCount: Int {
+        items.reduce(0) { count, item in
+            if case .entry = item {
+                return count + 1
+            }
+            return count
+        }
+    }
+
     private func historyButton(_ entry: SyncEntry) -> some View {
         Button {
             copyAction(entry)
         } label: {
-            HistoryRow(entry: entry)
+            HistoryRow(entry: entry, isLatest: entry.id == latestID)
         }
         .buttonStyle(.plain)
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
-                deleteAction(entry)
+                hideAction(entry)
             } label: {
-                Label("删除", systemImage: "trash")
+                Label("隐藏", systemImage: "eye.slash")
             }
         }
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
@@ -903,6 +1110,7 @@ private struct HistorySection: View {
 
 private struct HistoryRow: View {
     let entry: SyncEntry
+    let isLatest: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -918,6 +1126,18 @@ private struct HistoryRow: View {
                 }
 
                 Spacer()
+
+                HStack(spacing: 6) {
+                    if isLatest {
+                        StatusIcon(systemName: "sparkles", color: Color.textSyncWarning, label: "最新")
+                    }
+
+                    if entry.isLocallyEdited {
+                        StatusIcon(systemName: "pencil.circle.fill", color: Color.textSyncWarning, label: "本地修改")
+                    } else {
+                        StatusIcon(systemName: "icloud.fill", color: Color.textSyncTeal, label: "云端一致")
+                    }
+                }
 
                 Text(entry.time.textSyncFormatted)
                     .font(.caption)
@@ -940,6 +1160,56 @@ private struct HistoryRow: View {
     }
 }
 
+private struct HiddenRangeButton: View {
+    let range: HiddenEntryRange
+    let restoreAction: (HiddenEntryRange) -> Void
+
+    var body: some View {
+        Button {
+            restoreAction(range)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "eye.slash")
+                    .font(.caption.weight(.bold))
+
+                Text("\(range.title) · 点按显示")
+                    .font(.caption.weight(.semibold))
+
+                Spacer()
+
+                Text("\(range.count)")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.textSyncMuted.opacity(0.16)))
+            }
+            .foregroundStyle(Color.textSyncMuted)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.textSyncPaper.opacity(0.54))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.textSyncLine.opacity(0.55), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct StatusIcon: View {
+    let systemName: String
+    let color: Color
+    let label: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.caption.weight(.bold))
+            .foregroundStyle(color)
+            .accessibilityLabel(label)
+    }
+}
+
 private struct SettingsView: View {
     @Binding var appTitle: String
     @Binding var serverAddress: String
@@ -948,6 +1218,8 @@ private struct SettingsView: View {
     let didLastConnectionTestSucceed: Bool
     let testAction: () -> Void
     let saveAction: () -> Void
+    let resetLocalDataAction: () -> Void
+    @State private var isResetConfirmationPresented = false
 
     var body: some View {
         NavigationStack {
@@ -1019,12 +1291,28 @@ private struct SettingsView: View {
                 }
                 .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
 
+                Button {
+                    isResetConfirmationPresented = true
+                } label: {
+                    Label("重置本地数据", systemImage: "arrow.counterclockwise.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncWarning))
+
                 Spacer()
             }
             .padding(18)
             .background(AppBackground())
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
+            .alert("重置本地数据？", isPresented: $isResetConfirmationPresented) {
+                Button("取消", role: .cancel) {}
+                Button("重置", role: .destructive) {
+                    resetLocalDataAction()
+                }
+            } message: {
+                Text("这会清空本机缓存、置顶、隐藏和本地修改记录，不会删除服务器上的文本，也会保留当前服务器地址。")
+            }
         }
     }
 }
