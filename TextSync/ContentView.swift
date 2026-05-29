@@ -347,6 +347,23 @@ final class TextSyncLocalStore {
         try saveIfNeeded()
     }
 
+    func replaceWithRemote(_ entry: SyncEntry, serverAddress: String) throws {
+        let serverKey = cacheServerKey(serverAddress)
+        let object = try cachedObject(id: entry.id, serverAddress: serverKey) ?? NSEntityDescription.insertNewObject(forEntityName: "CachedEntry", into: container.viewContext)
+        object.setValue(Int64(entry.id), forKey: "id")
+        object.setValue(entry.time, forKey: "time")
+        object.setValue(entry.content, forKey: "content")
+        object.setValue(false, forKey: "isLocallyEdited")
+        object.setValue(serverKey, forKey: "serverAddress")
+        if object.value(forKey: "isDeleted") == nil {
+            object.setValue(false, forKey: "isDeleted")
+        }
+        if object.value(forKey: "isPinned") == nil {
+            object.setValue(false, forKey: "isPinned")
+        }
+        try saveIfNeeded()
+    }
+
     func serverAddress() throws -> String {
         try settingValue(forKey: "serverAddress")
     }
@@ -490,7 +507,7 @@ final class TextSyncViewModel: ObservableObject {
         }
     }
 
-    func refresh(allowOverwriteLocalEdits: Bool = true) async {
+    func refresh(allowOverwriteLocalEdits: Bool = false) async {
         guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             loadCachedEntries()
             message = "请先设置服务器地址"
@@ -628,6 +645,30 @@ final class TextSyncViewModel: ObservableObject {
         }
     }
 
+    func updateEntryFromCloud(_ entry: SyncEntry) async {
+        guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message = "请先设置服务器地址"
+            return
+        }
+
+        do {
+            let remoteEntries = try await service.listEntries(serverAddress: serverAddress)
+            guard let remoteEntry = remoteEntries.first(where: { $0.id == entry.id }) else {
+                message = "云端没有找到 #\(entry.id)"
+                return
+            }
+            serverAddress = try ServerAddress.normalized(serverAddress)
+            try localStore.replaceWithRemote(remoteEntry, serverAddress: serverAddress)
+            entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            syncLatestDraft()
+            normalizeVisibleCount()
+            message = "已用云端更新 #\(entry.id)"
+        } catch {
+            message = "更新失败：\(error.localizedDescription)"
+        }
+    }
+
     func loadMoreHistory() {
         visibleHistoryCount = min(visibleHistoryCount + pageSize, history.count)
     }
@@ -756,6 +797,7 @@ final class TextSyncViewModel: ObservableObject {
 struct ContentView: View {
     @StateObject private var viewModel = TextSyncViewModel()
     @State private var isSettingsPresented = false
+    @State private var isHelpPresented = false
     @State private var editingEntry: SyncEntry?
     @State private var editingText = ""
 
@@ -800,6 +842,9 @@ struct ContentView: View {
                             editingText = entry.content
                             editingEntry = entry
                         },
+                        updateFromCloudAction: { entry in
+                            Task { await viewModel.updateEntryFromCloud(entry) }
+                        },
                         pinAction: { viewModel.togglePinned($0) },
                         hideAction: { viewModel.hideLocal($0) },
                         restoreHiddenAction: { viewModel.restoreHidden($0) },
@@ -809,7 +854,7 @@ struct ContentView: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .refreshable {
-                    await viewModel.refresh(allowOverwriteLocalEdits: true)
+                    await viewModel.refresh(allowOverwriteLocalEdits: false)
                 }
             }
             .navigationTitle("")
@@ -824,12 +869,11 @@ struct ContentView: View {
                     .accessibilityLabel("服务器设置")
 
                     Button {
-                        Task { await viewModel.refresh(allowOverwriteLocalEdits: true) }
+                        isHelpPresented = true
                     } label: {
-                        Image(systemName: "arrow.clockwise")
+                        Image(systemName: "questionmark.circle")
                     }
-                    .disabled(viewModel.isLoading)
-                    .accessibilityLabel("刷新")
+                    .accessibilityLabel("帮助")
                 }
             }
             .task {
@@ -853,6 +897,10 @@ struct ContentView: View {
                     viewModel.resetLocalData()
                 }
                 .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $isHelpPresented) {
+                HelpView()
+                    .presentationDetents([.large])
             }
             .sheet(item: $editingEntry) { entry in
                 EditHistoryEntryView(
@@ -1033,6 +1081,7 @@ private struct HistorySection: View {
     let canLoadMore: Bool
     let copyAction: (SyncEntry) -> Void
     let editAction: (SyncEntry) -> Void
+    let updateFromCloudAction: (SyncEntry) -> Void
     let pinAction: (SyncEntry) -> Void
     let hideAction: (SyncEntry) -> Void
     let restoreHiddenAction: (HiddenEntryRange) -> Void
@@ -1128,6 +1177,12 @@ private struct HistorySection: View {
                     editAction(entry)
                 } label: {
                     Label("编辑本地文本", systemImage: "pencil.circle.fill")
+                }
+
+                Button {
+                    updateFromCloudAction(entry)
+                } label: {
+                    Label("更新", systemImage: "icloud.and.arrow.down.fill")
                 }
 
                 Button {
@@ -1291,27 +1346,27 @@ private struct HiddenRangeButton: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "eye.slash")
-                    .font(.caption.weight(.bold))
+                    .font(.caption2.weight(.semibold))
 
-                Text("\(range.title) · 点按显示")
-                    .font(.caption.weight(.semibold))
+                Text(range.title)
+                    .font(.caption2.weight(.medium))
 
                 Spacer()
 
                 Text("\(range.count)")
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 3)
                     .background(Capsule().fill(Color.textSyncMuted.opacity(0.16)))
             }
-            .foregroundStyle(Color.textSyncMuted)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.textSyncPaper.opacity(0.54))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .foregroundStyle(Color.textSyncMuted.opacity(0.72))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Color.textSyncPaper.opacity(0.26))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(Color.textSyncLine.opacity(0.55), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.textSyncLine.opacity(0.24), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -1435,6 +1490,114 @@ private struct SettingsView: View {
                 Text("这会清空本机缓存、置顶、隐藏和本地修改记录，不会删除服务器上的文本，也会保留当前服务器地址。")
             }
         }
+    }
+}
+
+private struct HelpView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HelpCard(
+                        title: "文本中转是什么",
+                        systemImage: "bolt.horizontal.circle.fill",
+                        items: [
+                            "把临时文本、链接、备忘和代码片段通过自己的服务器在多设备之间中转。",
+                            "服务端可自部署，App 只保存你设置的服务器地址。",
+                            "自动同步和下拉同步都会保留本地修改，不会悄悄覆盖。"
+                        ]
+                    )
+
+                    HelpCard(
+                        title: "常用操作",
+                        systemImage: "hand.tap.fill",
+                        items: [
+                            "点击历史条目：快速复制。",
+                            "长按历史条目：打开更多操作菜单。",
+                            "左滑：置顶或取消置顶。",
+                            "右滑：隐藏本机条目。"
+                        ]
+                    )
+
+                    HelpCard(
+                        title: "本地和云端",
+                        systemImage: "icloud.fill",
+                        items: [
+                            "云图标表示这条内容与云端一致。",
+                            "铅笔图标表示这条内容在本机修改过。",
+                            "长按菜单里的“更新”会用云端内容覆盖这一条本地记录。",
+                            "编辑本地文本不会上传到服务器。"
+                        ]
+                    )
+
+                    HelpCard(
+                        title: "隐藏和置顶",
+                        systemImage: "pin.fill",
+                        items: [
+                            "隐藏只影响本机列表，不会删除服务器数据。",
+                            "隐藏区间会用很淡的提示显示，并保留隐藏条数。",
+                            "置顶条目不受普通历史显示条数影响。"
+                        ]
+                    )
+
+                    HelpCard(
+                        title: "快捷指令",
+                        systemImage: "wand.and.stars",
+                        items: [
+                            "可以上传剪贴板文本，也可以获取远程最新文本并复制。",
+                            "上传时建议在快捷指令里先使用“获取剪贴板”，再把结果传给 TextSync。",
+                            "这样比让 App 自己读取剪贴板更稳定。"
+                        ]
+                    )
+                }
+                .padding(18)
+            }
+            .background(AppBackground())
+            .navigationTitle("帮助")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct HelpCard: View {
+    let title: String
+    let systemImage: String
+    let items: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+                .foregroundStyle(Color.textSyncBrown)
+
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(items, id: \.self) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle()
+                            .fill(Color.textSyncTeal.opacity(0.75))
+                            .frame(width: 5, height: 5)
+                            .padding(.top, 7)
+
+                        Text(item)
+                            .font(.footnote)
+                            .foregroundStyle(Color.textSyncMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
     }
 }
 
