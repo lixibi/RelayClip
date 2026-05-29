@@ -616,6 +616,18 @@ final class TextSyncViewModel: ObservableObject {
         }
     }
 
+    func editLocal(_ entry: SyncEntry, content: String) {
+        do {
+            try localStore.saveLocalContent(id: entry.id, serverAddress: serverAddress, content: content)
+            entries = try localStore.visibleEntries(serverAddress: serverAddress)
+            hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            syncLatestDraft()
+            message = "本地修改已保存"
+        } catch {
+            message = "本地编辑保存失败"
+        }
+    }
+
     func loadMoreHistory() {
         visibleHistoryCount = min(visibleHistoryCount + pageSize, history.count)
     }
@@ -744,6 +756,8 @@ final class TextSyncViewModel: ObservableObject {
 struct ContentView: View {
     @StateObject private var viewModel = TextSyncViewModel()
     @State private var isSettingsPresented = false
+    @State private var editingEntry: SyncEntry?
+    @State private var editingText = ""
 
     var body: some View {
         NavigationStack {
@@ -782,6 +796,10 @@ struct ContentView: View {
                         latestID: viewModel.latest?.id,
                         canLoadMore: viewModel.canLoadMoreHistory,
                         copyAction: { viewModel.copy($0) },
+                        editAction: { entry in
+                            editingText = entry.content
+                            editingEntry = entry
+                        },
                         pinAction: { viewModel.togglePinned($0) },
                         hideAction: { viewModel.hideLocal($0) },
                         restoreHiddenAction: { viewModel.restoreHidden($0) },
@@ -833,6 +851,16 @@ struct ContentView: View {
                     Task { await viewModel.refresh(allowOverwriteLocalEdits: false) }
                 } resetLocalDataAction: {
                     viewModel.resetLocalData()
+                }
+                .presentationDetents([.medium, .large])
+            }
+            .sheet(item: $editingEntry) { entry in
+                EditHistoryEntryView(
+                    entry: entry,
+                    text: $editingText
+                ) {
+                    viewModel.editLocal(entry, content: editingText)
+                    editingEntry = nil
                 }
                 .presentationDetents([.medium, .large])
             }
@@ -1004,6 +1032,7 @@ private struct HistorySection: View {
     let latestID: Int?
     let canLoadMore: Bool
     let copyAction: (SyncEntry) -> Void
+    let editAction: (SyncEntry) -> Void
     let pinAction: (SyncEntry) -> Void
     let hideAction: (SyncEntry) -> Void
     let restoreHiddenAction: (HiddenEntryRange) -> Void
@@ -1083,12 +1112,15 @@ private struct HistorySection: View {
     }
 
     private func historyButton(_ entry: SyncEntry) -> some View {
-        Button {
-            copyAction(entry)
-        } label: {
-            HistoryRow(entry: entry, isLatest: entry.id == latestID)
-        }
-        .buttonStyle(.plain)
+        HistoryRow(entry: entry, isLatest: entry.id == latestID)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                copyAction(entry)
+            }
+            .onLongPressGesture(minimumDuration: 0.45) {
+                editAction(entry)
+            }
+            .accessibilityAddTraits(.isButton)
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
                 hideAction(entry)
@@ -1105,6 +1137,67 @@ private struct HistorySection: View {
             .tint(Color.textSyncTeal)
         }
         .textSyncListRow()
+    }
+}
+
+private struct EditHistoryEntryView: View {
+    let entry: SyncEntry
+    @Binding var text: String
+    let saveAction: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Label("#\(entry.id)", systemImage: "pencil.circle.fill")
+                        .font(.headline)
+                        .foregroundStyle(Color.textSyncBrown)
+
+                    Spacer()
+
+                    Text(entry.time.textSyncFormatted)
+                        .font(.caption)
+                        .foregroundStyle(Color.textSyncMuted)
+                }
+
+                Text("只修改本机缓存，不会上传或覆盖服务器内容。")
+                    .font(.footnote)
+                    .foregroundStyle(Color.textSyncMuted)
+
+                TextEditor(text: $text)
+                    .scrollContentBackground(.hidden)
+                    .font(.body)
+                    .foregroundStyle(Color.textSyncBrown)
+                    .frame(minHeight: 180)
+                    .padding(10)
+                    .background(Color.textSyncPaper)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.textSyncLine, lineWidth: 1)
+                    )
+
+                Button(action: saveAction) {
+                    Label("保存本地修改", systemImage: "checkmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+
+                Spacer()
+            }
+            .padding(18)
+            .background(AppBackground())
+            .navigationTitle("编辑本地文本")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
