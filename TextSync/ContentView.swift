@@ -7,14 +7,45 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
     let id: Int
     let time: Date
     let content: String
+    let kind: String
+    let mimeType: String?
+    let assetURL: String?
+    let thumbnailURL: String?
+    let fileName: String?
+    let width: Int?
+    let height: Int?
+    let byteCount: Int?
     let isPinned: Bool
     let isLocallyEdited: Bool
     let isHidden: Bool
 
-    init(id: Int, time: Date, content: String, isPinned: Bool = false, isLocallyEdited: Bool = false, isHidden: Bool = false) {
+    init(
+        id: Int,
+        time: Date,
+        content: String,
+        kind: String = "text",
+        mimeType: String? = nil,
+        assetURL: String? = nil,
+        thumbnailURL: String? = nil,
+        fileName: String? = nil,
+        width: Int? = nil,
+        height: Int? = nil,
+        byteCount: Int? = nil,
+        isPinned: Bool = false,
+        isLocallyEdited: Bool = false,
+        isHidden: Bool = false
+    ) {
         self.id = id
         self.time = time
         self.content = content
+        self.kind = kind.isEmpty ? "text" : kind
+        self.mimeType = mimeType
+        self.assetURL = assetURL
+        self.thumbnailURL = thumbnailURL
+        self.fileName = fileName
+        self.width = width
+        self.height = height
+        self.byteCount = byteCount
         self.isPinned = isPinned
         self.isLocallyEdited = isLocallyEdited
         self.isHidden = isHidden
@@ -24,6 +55,14 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         case id
         case time
         case content
+        case kind
+        case mimeType = "mime_type"
+        case assetURL = "asset_url"
+        case thumbnailURL = "thumbnail_url"
+        case fileName = "file_name"
+        case width
+        case height
+        case byteCount = "byte_count"
     }
 
     init(from decoder: Decoder) throws {
@@ -31,9 +70,50 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         id = try container.decode(Int.self, forKey: .id)
         time = try container.decode(Date.self, forKey: .time)
         content = try container.decode(String.self, forKey: .content)
+        kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "text"
+        mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
+        assetURL = try container.decodeIfPresent(String.self, forKey: .assetURL)
+        thumbnailURL = try container.decodeIfPresent(String.self, forKey: .thumbnailURL)
+        fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+        width = try container.decodeIfPresent(Int.self, forKey: .width)
+        height = try container.decodeIfPresent(Int.self, forKey: .height)
+        byteCount = try container.decodeIfPresent(Int.self, forKey: .byteCount)
         isPinned = false
         isLocallyEdited = false
         isHidden = false
+    }
+
+    var isImage: Bool {
+        kind == "image"
+    }
+
+    var imageDetailText: String {
+        let size = width.flatMap { width in height.map { "\(width)×\($0)" } }
+        let name = fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [name, size].compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.joined(separator: " · ")
+    }
+
+    func resolvedThumbnailURL(serverAddress: String) -> URL? {
+        resolvedURL(thumbnailURL ?? assetURL, serverAddress: serverAddress)
+    }
+
+    func resolvedAssetURL(serverAddress: String) -> URL? {
+        resolvedURL(assetURL, serverAddress: serverAddress)
+    }
+
+    private func resolvedURL(_ rawValue: String?, serverAddress: String) -> URL? {
+        guard let rawValue, !rawValue.isEmpty else { return nil }
+        if let absoluteURL = URL(string: rawValue), absoluteURL.scheme != nil {
+            return absoluteURL
+        }
+        guard let normalized = try? ServerAddress.normalized(serverAddress),
+              let baseURL = URL(string: normalized) else {
+            return nil
+        }
+        return URL(string: rawValue, relativeTo: baseURL)?.absoluteURL
     }
 }
 
@@ -147,6 +227,29 @@ final class TextSyncService {
         try validate(response)
     }
 
+    func postImage(_ imageData: Data, fileName: String, mimeType: String, serverAddress: String) async throws {
+        let url = try endpoint("/api/items", serverAddress: serverAddress)
+        let boundary = "TextSyncBoundary-\(UUID().uuidString)"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = multipartBody(
+            imageData: imageData,
+            fileName: fileName,
+            mimeType: mimeType,
+            boundary: boundary
+        )
+
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
+    func data(from url: URL) async throws -> Data {
+        let (data, response) = try await session.data(for: getRequest(url: url))
+        try validate(response)
+        return data
+    }
+
     func testConnection(serverAddress: String) async throws -> Int {
         try await listEntries(serverAddress: serverAddress).count
     }
@@ -169,6 +272,16 @@ final class TextSyncService {
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         return request
+    }
+
+    private func multipartBody(imageData: Data, fileName: String, mimeType: String, boundary: String) -> Data {
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8) ?? Data())
+        body.append("Content-Disposition: form-data; name=\"image\"; filename=\"\(fileName)\"\r\n".data(using: .utf8) ?? Data())
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8) ?? Data())
+        body.append(imageData)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8) ?? Data())
+        return body
     }
 
     private func validate(_ response: URLResponse) throws {
@@ -206,6 +319,46 @@ final class TextSyncLocalStore {
         content.attributeType = .stringAttributeType
         content.isOptional = false
 
+        let kind = NSAttributeDescription()
+        kind.name = "kind"
+        kind.attributeType = .stringAttributeType
+        kind.isOptional = true
+
+        let mimeType = NSAttributeDescription()
+        mimeType.name = "mimeType"
+        mimeType.attributeType = .stringAttributeType
+        mimeType.isOptional = true
+
+        let assetURL = NSAttributeDescription()
+        assetURL.name = "assetURL"
+        assetURL.attributeType = .stringAttributeType
+        assetURL.isOptional = true
+
+        let thumbnailURL = NSAttributeDescription()
+        thumbnailURL.name = "thumbnailURL"
+        thumbnailURL.attributeType = .stringAttributeType
+        thumbnailURL.isOptional = true
+
+        let fileName = NSAttributeDescription()
+        fileName.name = "fileName"
+        fileName.attributeType = .stringAttributeType
+        fileName.isOptional = true
+
+        let width = NSAttributeDescription()
+        width.name = "width"
+        width.attributeType = .integer64AttributeType
+        width.isOptional = true
+
+        let height = NSAttributeDescription()
+        height.name = "height"
+        height.attributeType = .integer64AttributeType
+        height.isOptional = true
+
+        let byteCount = NSAttributeDescription()
+        byteCount.name = "byteCount"
+        byteCount.attributeType = .integer64AttributeType
+        byteCount.isOptional = true
+
         let serverAddress = NSAttributeDescription()
         serverAddress.name = "serverAddress"
         serverAddress.attributeType = .stringAttributeType
@@ -229,7 +382,23 @@ final class TextSyncLocalStore {
         isLocallyEdited.isOptional = false
         isLocallyEdited.defaultValue = false
 
-        entryEntity.properties = [id, time, content, serverAddress, isDeleted, isPinned, isLocallyEdited]
+        entryEntity.properties = [
+            id,
+            time,
+            content,
+            kind,
+            mimeType,
+            assetURL,
+            thumbnailURL,
+            fileName,
+            width,
+            height,
+            byteCount,
+            serverAddress,
+            isDeleted,
+            isPinned,
+            isLocallyEdited
+        ]
 
         let settingEntity = NSEntityDescription()
         settingEntity.name = "AppSetting"
@@ -308,6 +477,7 @@ final class TextSyncLocalStore {
                 object.setValue(entry.content, forKey: "content")
                 object.setValue(false, forKey: "isLocallyEdited")
             }
+            updateMetadata(on: object, with: entry)
             object.setValue(serverKey, forKey: "serverAddress")
             if object.value(forKey: "isDeleted") == nil {
                 object.setValue(false, forKey: "isDeleted")
@@ -368,6 +538,7 @@ final class TextSyncLocalStore {
         object.setValue(entry.time, forKey: "time")
         object.setValue(entry.content, forKey: "content")
         object.setValue(false, forKey: "isLocallyEdited")
+        updateMetadata(on: object, with: entry)
         object.setValue(serverKey, forKey: "serverAddress")
         if object.value(forKey: "isDeleted") == nil {
             object.setValue(false, forKey: "isDeleted")
@@ -442,7 +613,33 @@ final class TextSyncLocalStore {
         let isPinned = object.value(forKey: "isPinned") as? Bool ?? false
         let isLocallyEdited = object.value(forKey: "isLocallyEdited") as? Bool ?? false
         let isHidden = object.value(forKey: "isDeleted") as? Bool ?? false
-        return SyncEntry(id: Int(id), time: time, content: content, isPinned: isPinned, isLocallyEdited: isLocallyEdited, isHidden: isHidden)
+        return SyncEntry(
+            id: Int(id),
+            time: time,
+            content: content,
+            kind: object.value(forKey: "kind") as? String ?? "text",
+            mimeType: object.value(forKey: "mimeType") as? String,
+            assetURL: object.value(forKey: "assetURL") as? String,
+            thumbnailURL: object.value(forKey: "thumbnailURL") as? String,
+            fileName: object.value(forKey: "fileName") as? String,
+            width: (object.value(forKey: "width") as? Int64).map(Int.init),
+            height: (object.value(forKey: "height") as? Int64).map(Int.init),
+            byteCount: (object.value(forKey: "byteCount") as? Int64).map(Int.init),
+            isPinned: isPinned,
+            isLocallyEdited: isLocallyEdited,
+            isHidden: isHidden
+        )
+    }
+
+    private func updateMetadata(on object: NSManagedObject, with entry: SyncEntry) {
+        object.setValue(entry.kind, forKey: "kind")
+        object.setValue(entry.mimeType, forKey: "mimeType")
+        object.setValue(entry.assetURL, forKey: "assetURL")
+        object.setValue(entry.thumbnailURL, forKey: "thumbnailURL")
+        object.setValue(entry.fileName, forKey: "fileName")
+        object.setValue(entry.width.map { Int64($0) }, forKey: "width")
+        object.setValue(entry.height.map { Int64($0) }, forKey: "height")
+        object.setValue(entry.byteCount.map { Int64($0) }, forKey: "byteCount")
     }
 
     private func saveIfNeeded() throws {
@@ -454,7 +651,14 @@ final class TextSyncLocalStore {
 
 @MainActor
 final class TextSyncViewModel: ObservableObject {
+    private struct ClipboardImagePayload {
+        let data: Data
+        let fileName: String
+        let mimeType: String
+    }
+
     private let pageSize = 10
+    private let maxClipboardImageBytes = 8 * 1024 * 1024
     private let service = TextSyncService()
     private let localStore = TextSyncLocalStore()
 
@@ -547,6 +751,34 @@ final class TextSyncViewModel: ObservableObject {
         }
     }
 
+    func sendClipboardImage() async {
+        guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message = "请先设置服务器地址"
+            return
+        }
+
+        guard let payload = clipboardImagePayload() else {
+            message = "剪贴板没有可上传图片"
+            return
+        }
+
+        isSending = true
+        defer { isSending = false }
+
+        do {
+            try await service.postImage(
+                payload.data,
+                fileName: payload.fileName,
+                mimeType: payload.mimeType,
+                serverAddress: serverAddress
+            )
+            message = "图片已上传"
+            await refresh()
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
     func send() async {
         guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             message = "请先设置服务器地址"
@@ -615,12 +847,28 @@ final class TextSyncViewModel: ObservableObject {
     }
 
     func pasteFromClipboard() {
-        draft = UIPasteboard.general.string ?? ""
-        message = draft.isEmpty ? "剪贴板没有可用文本" : "已从剪贴板粘贴"
+        if let text = UIPasteboard.general.string, !text.isEmpty {
+            draft = text
+            message = "已从剪贴板粘贴"
+        } else if UIPasteboard.general.image != nil {
+            message = "剪贴板是图片，可直接上传图片"
+        } else {
+            message = "剪贴板没有可用内容"
+        }
     }
 
-    func copyLatest() {
-        let content = latestDraft.isEmpty ? latest?.content ?? "" : latestDraft
+    func copyLatest() async {
+        guard let latest else {
+            message = "没有可复制的文本"
+            return
+        }
+
+        if latest.isImage {
+            await copyImage(latest)
+            return
+        }
+
+        let content = latestDraft.isEmpty ? latest.content : latestDraft
         guard !content.isEmpty else {
             message = "没有可复制的文本"
             return
@@ -629,12 +877,18 @@ final class TextSyncViewModel: ObservableObject {
         message = "已复制最新文本"
     }
 
-    func copy(_ entry: SyncEntry) {
+    func copy(_ entry: SyncEntry) async {
+        if entry.isImage {
+            await copyImage(entry)
+            return
+        }
+
         UIPasteboard.general.string = entry.content
         message = "已复制历史文本"
     }
 
     func updateLatestDraft(_ content: String) {
+        guard latest?.isImage != true else { return }
         latestDraft = content
         guard let latest else { return }
 
@@ -743,7 +997,45 @@ final class TextSyncViewModel: ObservableObject {
     }
 
     private func syncLatestDraft() {
-        latestDraft = latest?.content ?? ""
+        latestDraft = latest?.isImage == true ? "" : latest?.content ?? ""
+    }
+
+    private func clipboardImagePayload() -> ClipboardImagePayload? {
+        guard let image = UIPasteboard.general.image else { return nil }
+        if let pngData = image.pngData(), pngData.count <= maxClipboardImageBytes {
+            return ClipboardImagePayload(
+                data: pngData,
+                fileName: "clipboard.png",
+                mimeType: "image/png"
+            )
+        }
+        if let jpegData = image.jpegData(compressionQuality: 0.86), jpegData.count <= maxClipboardImageBytes {
+            return ClipboardImagePayload(
+                data: jpegData,
+                fileName: "clipboard.jpg",
+                mimeType: "image/jpeg"
+            )
+        }
+        return nil
+    }
+
+    private func copyImage(_ entry: SyncEntry) async {
+        guard let url = entry.resolvedAssetURL(serverAddress: serverAddress) else {
+            message = "图片地址无效"
+            return
+        }
+
+        do {
+            let data = try await service.data(from: url)
+            guard let image = UIImage(data: data) else {
+                message = "图片读取失败"
+                return
+            }
+            UIPasteboard.general.image = image
+            message = "已复制图片"
+        } catch {
+            message = "复制图片失败：\(error.localizedDescription)"
+        }
     }
 
     private func makeHistoryItems(visibleEntries: [SyncEntry], hiddenEntries: [SyncEntry]) -> [HistoryListItem] {
@@ -830,15 +1122,17 @@ struct ContentView: View {
                             get: { viewModel.latestDraft },
                             set: { viewModel.updateLatestDraft($0) }
                         ),
+                        serverAddress: viewModel.serverAddress,
                         isLoading: viewModel.isLoading,
-                        copyAction: { viewModel.copyLatest() }
+                        copyAction: { Task { await viewModel.copyLatest() } }
                     )
                     .textSyncListRow()
 
                     ComposerView(
                         draft: $viewModel.draft,
                         isSending: viewModel.isSending,
-                        pasteAction: { viewModel.pasteFromClipboard() }
+                        pasteAction: { viewModel.pasteFromClipboard() },
+                        uploadImageAction: { Task { await viewModel.sendClipboardImage() } }
                     ) {
                         Task { await viewModel.send() }
                     }
@@ -850,8 +1144,9 @@ struct ContentView: View {
                         totalCount: viewModel.history.count,
                         hiddenCount: viewModel.hiddenHistory.count,
                         latestID: viewModel.latest?.id,
+                        serverAddress: viewModel.serverAddress,
                         canLoadMore: viewModel.canLoadMoreHistory,
-                        copyAction: { viewModel.copy($0) },
+                        copyAction: { entry in Task { await viewModel.copy(entry) } },
                         editAction: { entry in
                             editingText = entry.content
                             editingEntry = entry
@@ -962,13 +1257,14 @@ private struct HeaderView: View {
 private struct LatestTextView: View {
     let entry: SyncEntry?
     @Binding var text: String
+    let serverAddress: String
     let isLoading: Bool
     let copyAction: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("最新文本")
+                Text(entry?.isImage == true ? "最新图片" : "最新文本")
                     .font(.headline)
                     .foregroundStyle(Color.textSyncBrown)
 
@@ -989,22 +1285,26 @@ private struct LatestTextView: View {
                 }
             }
 
-            TextEditor(text: editableText)
-                .scrollContentBackground(.hidden)
-                .font(.body)
-                .foregroundStyle(Color.textSyncBrown)
-                .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
-                .padding(10)
-                .background(Color.textSyncPaper)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color.textSyncLine, lineWidth: 1)
-                )
-                .disabled(entry == nil)
+            if let entry, entry.isImage {
+                ImagePreview(entry: entry, serverAddress: serverAddress, minHeight: 180)
+            } else {
+                TextEditor(text: editableText)
+                    .scrollContentBackground(.hidden)
+                    .font(.body)
+                    .foregroundStyle(Color.textSyncBrown)
+                    .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
+                    .padding(10)
+                    .background(Color.textSyncPaper)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.textSyncLine, lineWidth: 1)
+                    )
+                    .disabled(entry == nil)
+            }
 
             Button(action: copyAction) {
-                Label("复制最新文本", systemImage: "doc.on.doc.fill")
+                Label(entry?.isImage == true ? "复制最新图片" : "复制最新文本", systemImage: entry?.isImage == true ? "photo.on.rectangle" : "doc.on.doc.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
@@ -1038,6 +1338,7 @@ private struct ComposerView: View {
     @Binding var draft: String
     let isSending: Bool
     let pasteAction: () -> Void
+    let uploadImageAction: () -> Void
     let sendAction: () -> Void
 
     var body: some View {
@@ -1080,6 +1381,13 @@ private struct ComposerView: View {
                 .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncGreen))
                 .disabled(isSending)
             }
+
+            Button(action: uploadImageAction) {
+                Label(isSending ? "上传中" : "上传剪贴板图片", systemImage: "photo.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+            .disabled(isSending)
         }
         .padding(16)
         .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
@@ -1092,6 +1400,7 @@ private struct HistorySection: View {
     let totalCount: Int
     let hiddenCount: Int
     let latestID: Int?
+    let serverAddress: String
     let canLoadMore: Bool
     let copyAction: (SyncEntry) -> Void
     let editAction: (SyncEntry) -> Void
@@ -1175,7 +1484,7 @@ private struct HistorySection: View {
     }
 
     private func historyButton(_ entry: SyncEntry) -> some View {
-        HistoryRow(entry: entry, isLatest: entry.id == latestID)
+        HistoryRow(entry: entry, isLatest: entry.id == latestID, serverAddress: serverAddress)
             .contentShape(Rectangle())
             .onTapGesture {
                 copyAction(entry)
@@ -1187,10 +1496,12 @@ private struct HistorySection: View {
                     Label("复制", systemImage: "doc.on.doc.fill")
                 }
 
-                Button {
-                    editAction(entry)
-                } label: {
-                    Label("编辑本地文本", systemImage: "pencil.circle.fill")
+                if !entry.isImage {
+                    Button {
+                        editAction(entry)
+                    } label: {
+                        Label("编辑本地文本", systemImage: "pencil.circle.fill")
+                    }
                 }
 
                 Button {
@@ -1216,7 +1527,9 @@ private struct HistorySection: View {
                 copyAction(entry)
             }
             .accessibilityAction(named: "编辑本地文本") {
-                editAction(entry)
+                if !entry.isImage {
+                    editAction(entry)
+                }
             }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
@@ -1301,6 +1614,7 @@ private struct EditHistoryEntryView: View {
 private struct HistoryRow: View {
     let entry: SyncEntry
     let isLatest: Bool
+    let serverAddress: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1334,11 +1648,15 @@ private struct HistoryRow: View {
                     .foregroundStyle(Color.textSyncMuted)
             }
 
-            Text(entry.content)
-                .font(.callout)
-                .foregroundStyle(Color.textSyncBrown)
-                .lineLimit(4)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if entry.isImage {
+                ImagePreview(entry: entry, serverAddress: serverAddress, minHeight: 132)
+            } else {
+                Text(entry.content)
+                    .font(.callout)
+                    .foregroundStyle(Color.textSyncBrown)
+                    .lineLimit(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(14)
         .background(Color.textSyncPaper)
@@ -1347,6 +1665,56 @@ private struct HistoryRow: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(Color.textSyncLine, lineWidth: 1)
         )
+    }
+}
+
+private struct ImagePreview: View {
+    let entry: SyncEntry
+    let serverAddress: String
+    let minHeight: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                Color.textSyncPaper
+
+                if let url = entry.resolvedThumbnailURL(serverAddress: serverAddress) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .empty:
+                            ProgressView()
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        case .failure:
+                            Label("图片加载失败", systemImage: "photo")
+                                .font(.callout.weight(.semibold))
+                                .foregroundStyle(Color.textSyncMuted)
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
+                } else {
+                    Label("图片地址无效", systemImage: "photo")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(Color.textSyncMuted)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: minHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.textSyncLine, lineWidth: 1)
+            )
+
+            if !entry.imageDetailText.isEmpty {
+                Text(entry.imageDetailText)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.textSyncMuted)
+                    .lineLimit(1)
+            }
+        }
     }
 }
 

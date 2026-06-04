@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,9 +24,19 @@ import (
 )
 
 type Entry struct {
-	ID      int       `json:"id"`
-	Time    time.Time `json:"time"`
-	Content string    `json:"content"`
+	ID           int       `json:"id"`
+	Time         time.Time `json:"time"`
+	Content      string    `json:"content"`
+	Kind         string    `json:"kind,omitempty"`
+	MimeType     string    `json:"mime_type,omitempty"`
+	AssetID      string    `json:"asset_id,omitempty"`
+	AssetURL     string    `json:"asset_url,omitempty"`
+	ThumbnailID  string    `json:"thumbnail_id,omitempty"`
+	ThumbnailURL string    `json:"thumbnail_url,omitempty"`
+	FileName     string    `json:"file_name,omitempty"`
+	Width        int       `json:"width,omitempty"`
+	Height       int       `json:"height,omitempty"`
+	ByteCount    int       `json:"byte_count,omitempty"`
 }
 
 var (
@@ -32,6 +47,8 @@ var (
 )
 
 const maxContentRunes = 65536
+const maxImageBytes = 8 * 1024 * 1024
+const thumbnailMaxSide = 360
 
 var errNoContentField = errors.New("no content field")
 
@@ -39,6 +56,26 @@ func configureDataFileFromEnv() {
 	if path := os.Getenv("KEYSERVER_DATA_FILE"); path != "" {
 		dataFile = path
 	}
+}
+
+func assetDir() string {
+	if path := os.Getenv("KEYSERVER_ASSET_DIR"); path != "" {
+		return path
+	}
+	return filepath.Join(filepath.Dir(dataFile), "assets")
+}
+
+func withAssetURLs(entry Entry) Entry {
+	if entry.Kind == "" {
+		entry.Kind = "text"
+	}
+	if entry.AssetID != "" {
+		entry.AssetURL = "/api/assets/" + entry.AssetID
+	}
+	if entry.ThumbnailID != "" {
+		entry.ThumbnailURL = "/api/assets/" + entry.ThumbnailID
+	}
+	return entry
 }
 
 func load() {
@@ -125,16 +162,38 @@ func getByID(id int) string {
 	return ""
 }
 
+func latestEntry() *Entry {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	if len(entries) == 0 {
+		return nil
+	}
+	entry := withAssetURLs(entries[len(entries)-1])
+	return &entry
+}
+
 func listEntries() []map[string]interface{} {
 	mu.RLock()
 	defer mu.RUnlock()
 
 	list := make([]map[string]interface{}, len(entries))
 	for i, e := range entries {
+		e = withAssetURLs(e)
 		list[i] = map[string]interface{}{
-			"id":      e.ID,
-			"time":    e.Time.Format(time.RFC3339),
-			"content": e.Content,
+			"id":            e.ID,
+			"time":          e.Time.Format(time.RFC3339),
+			"content":       e.Content,
+			"kind":          e.Kind,
+			"mime_type":     e.MimeType,
+			"asset_id":      e.AssetID,
+			"asset_url":     e.AssetURL,
+			"thumbnail_id":  e.ThumbnailID,
+			"thumbnail_url": e.ThumbnailURL,
+			"file_name":     e.FileName,
+			"width":         e.Width,
+			"height":        e.Height,
+			"byte_count":    e.ByteCount,
 		}
 	}
 	return list
@@ -238,7 +297,281 @@ func postContent(r *http.Request, body []byte) (string, error) {
 	}
 }
 
+func nextEntryID() int {
+	mu.Lock()
+	defer mu.Unlock()
+
+	id := nextID
+	nextID++
+	return id
+}
+
+func appendEntry(entry Entry) error {
+	mu.Lock()
+	entries = append(entries, entry)
+	mu.Unlock()
+	return save()
+}
+
+func postTextEntry(content string) error {
+	if content == "" {
+		return errNoContentField
+	}
+
+	if !utf8.ValidString(content) {
+		content = "invalid utf8"
+	}
+
+	if utf8.RuneCountInString(content) > maxContentRunes {
+		return http.ErrContentLength
+	}
+
+	entry := Entry{
+		ID:      nextEntryID(),
+		Time:    time.Now(),
+		Content: content,
+		Kind:    "text",
+	}
+	return appendEntry(entry)
+}
+
+func postImageEntry(upload *uploadedImage) error {
+	entry, err := storeImageAsset(upload, nextEntryID())
+	if err != nil {
+		return err
+	}
+	return appendEntry(entry)
+}
+
+type uploadedImage struct {
+	data     []byte
+	mimeType string
+	fileName string
+	width    int
+	height   int
+}
+
+func imageFromMultipart(r *http.Request, body []byte, boundary string) (*uploadedImage, string, error) {
+	form, err := multipart.NewReader(bytes.NewReader(body), boundary).ReadForm(int64(maxImageBytes + 1024*1024))
+	if err != nil {
+		return nil, "", err
+	}
+	defer form.RemoveAll()
+
+	for _, key := range []string{"image", "file", "asset"} {
+		files := form.File[key]
+		if len(files) == 0 {
+			continue
+		}
+		fileHeader := files[0]
+		if fileHeader.Size > maxImageBytes {
+			return nil, "", http.ErrContentLength
+		}
+		file, err := fileHeader.Open()
+		if err != nil {
+			return nil, "", err
+		}
+		defer file.Close()
+
+		data, err := io.ReadAll(io.LimitReader(file, maxImageBytes+1))
+		if err != nil {
+			return nil, "", err
+		}
+		if len(data) > maxImageBytes {
+			return nil, "", http.ErrContentLength
+		}
+
+		mimeType := fileHeader.Header.Get("Content-Type")
+		if mimeType == "" {
+			mimeType = http.DetectContentType(data)
+		}
+		image, err := decodeUploadedImage(data, mimeType, fileHeader.Filename)
+		if err != nil {
+			return nil, "", err
+		}
+		return image, "", nil
+	}
+
+	if content, ok := firstContentField(form.Value); ok {
+		return nil, content, nil
+	}
+
+	return nil, "", errNoContentField
+}
+
+func decodeUploadedImage(data []byte, mimeType string, fileName string) (*uploadedImage, error) {
+	if len(data) == 0 {
+		return nil, errNoContentField
+	}
+	if len(data) > maxImageBytes {
+		return nil, http.ErrContentLength
+	}
+
+	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if config.Width <= 0 || config.Height <= 0 {
+		return nil, errors.New("invalid image dimensions")
+	}
+
+	normalizedMime := normalizedImageMimeType(mimeType, format)
+	if normalizedMime == "" {
+		return nil, errors.New("unsupported image type")
+	}
+
+	return &uploadedImage{
+		data:     data,
+		mimeType: normalizedMime,
+		fileName: safeFileName(fileName, extensionForMimeType(normalizedMime)),
+		width:    config.Width,
+		height:   config.Height,
+	}, nil
+}
+
+func normalizedImageMimeType(mimeType string, format string) string {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/png", "image/jpeg", "image/jpg", "image/gif":
+		if strings.EqualFold(mimeType, "image/jpg") {
+			return "image/jpeg"
+		}
+		return strings.ToLower(strings.TrimSpace(mimeType))
+	}
+
+	switch strings.ToLower(format) {
+	case "png":
+		return "image/png"
+	case "jpeg", "jpg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	default:
+		return ""
+	}
+}
+
+func extensionForMimeType(mimeType string) string {
+	switch mimeType {
+	case "image/png":
+		return "png"
+	case "image/jpeg":
+		return "jpg"
+	case "image/gif":
+		return "gif"
+	default:
+		return "img"
+	}
+}
+
+func safeFileName(fileName string, fallbackExtension string) string {
+	name := filepath.Base(strings.TrimSpace(fileName))
+	if name == "." || name == "/" || name == "" {
+		return "clipboard." + fallbackExtension
+	}
+	name = strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ':' || r == 0 {
+			return '_'
+		}
+		return r
+	}, name)
+	if filepath.Ext(name) == "" {
+		name += "." + fallbackExtension
+	}
+	return name
+}
+
+func storeImageAsset(upload *uploadedImage, id int) (Entry, error) {
+	root := assetDir()
+	thumbDir := filepath.Join(root, "thumbs")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return Entry{}, err
+	}
+	if err := os.MkdirAll(thumbDir, 0755); err != nil {
+		return Entry{}, err
+	}
+
+	extension := extensionForMimeType(upload.mimeType)
+	assetID := fmt.Sprintf("%d-%d.%s", id, time.Now().UnixNano(), extension)
+	thumbnailID := "thumbs/" + fmt.Sprintf("%d-%d.jpg", id, time.Now().UnixNano())
+	assetPath := filepath.Join(root, assetID)
+	thumbnailPath := filepath.Join(root, thumbnailID)
+
+	if err := os.WriteFile(assetPath, upload.data, 0644); err != nil {
+		return Entry{}, err
+	}
+	thumbnail, err := makeJPEGThumbnail(upload.data)
+	if err != nil {
+		_ = os.Remove(assetPath)
+		return Entry{}, err
+	}
+	if err := os.WriteFile(thumbnailPath, thumbnail, 0644); err != nil {
+		_ = os.Remove(assetPath)
+		return Entry{}, err
+	}
+
+	content := fmt.Sprintf("图片 %s (%d×%d)", upload.fileName, upload.width, upload.height)
+	return Entry{
+		ID:          id,
+		Time:        time.Now(),
+		Content:     content,
+		Kind:        "image",
+		MimeType:    upload.mimeType,
+		AssetID:     assetID,
+		ThumbnailID: thumbnailID,
+		FileName:    upload.fileName,
+		Width:       upload.width,
+		Height:      upload.height,
+		ByteCount:   len(upload.data),
+	}, nil
+}
+
+func makeJPEGThumbnail(data []byte) ([]byte, error) {
+	source, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	bounds := source.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return nil, errors.New("invalid thumbnail dimensions")
+	}
+
+	scale := float64(thumbnailMaxSide) / float64(max(width, height))
+	if scale > 1 {
+		scale = 1
+	}
+	thumbWidth := max(1, int(float64(width)*scale))
+	thumbHeight := max(1, int(float64(height)*scale))
+	destination := image.NewRGBA(image.Rect(0, 0, thumbWidth, thumbHeight))
+	for y := 0; y < thumbHeight; y++ {
+		sourceY := bounds.Min.Y + y*height/thumbHeight
+		for x := 0; x < thumbWidth; x++ {
+			sourceX := bounds.Min.X + x*width/thumbWidth
+			destination.Set(x, y, source.At(sourceX, sourceY))
+		}
+	}
+
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, destination, &jpeg.Options{Quality: 82}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func max(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func handler(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/assets/") {
+		serveAsset(w, r)
+		return
+	}
+
 	switch r.URL.Path {
 	case "/":
 		http.ServeFile(w, r, "index.html")
@@ -262,50 +595,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(getEntry(offset)))
 
 	case "/api/post":
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "read error", http.StatusBadRequest)
-			return
-		}
-
-		content, err := postContent(r, body)
-		if err != nil {
-			http.Error(w, "invalid content", http.StatusBadRequest)
-			return
-		}
-		if content == "" {
-			http.Error(w, "empty", http.StatusBadRequest)
-			return
-		}
-
-		// UTF-8 验证与清理，支持中文、英文、数字等所有字符
-		if !utf8.ValidString(content) {
-			content = "invalid utf8"
-		}
-
-		// Keep large pasted text intact; reject oversize input instead of silently truncating it.
-		if utf8.RuneCountInString(content) > maxContentRunes {
-			http.Error(w, "too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-
-		mu.Lock()
-		entry := Entry{
-			ID:      nextID,
-			Time:    time.Now(),
-			Content: content,
-		}
-		entries = append(entries, entry)
-		nextID++
-		mu.Unlock()
-
-		if err := save(); err != nil {
-			http.Error(w, "save error", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write([]byte("ok"))
+		handlePostText(w, r)
 
 	case "/api/list":
 		list := listEntries()
@@ -313,9 +603,146 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 
+	case "/api/items":
+		switch r.Method {
+		case http.MethodGet:
+			list := listEntries()
+			data, _ := json.Marshal(list)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(data)
+		case http.MethodPost:
+			handlePostItem(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+
+	case "/api/items/latest":
+		entry := latestEntry()
+		if entry == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		data, _ := json.Marshal(entry)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func handlePostText(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read error", http.StatusBadRequest)
+		return
+	}
+
+	content, err := postContent(r, body)
+	if err != nil {
+		http.Error(w, "invalid content", http.StatusBadRequest)
+		return
+	}
+	if content == "" {
+		http.Error(w, "empty", http.StatusBadRequest)
+		return
+	}
+
+	if err := postTextEntry(content); err != nil {
+		writePostError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte("ok"))
+}
+
+func handlePostItem(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxImageBytes+1024*1024))
+	if err != nil {
+		http.Error(w, "read error", http.StatusBadRequest)
+		return
+	}
+
+	contentType := r.Header.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = ""
+	}
+
+	if mediaType == "multipart/form-data" {
+		boundary := params["boundary"]
+		if boundary == "" {
+			http.Error(w, "invalid content", http.StatusBadRequest)
+			return
+		}
+
+		image, content, err := imageFromMultipart(r, body, boundary)
+		if err != nil {
+			if errors.Is(err, http.ErrContentLength) {
+				http.Error(w, "too large", http.StatusRequestEntityTooLarge)
+			} else {
+				http.Error(w, "invalid content", http.StatusBadRequest)
+			}
+			return
+		}
+		if image != nil {
+			if err := postImageEntry(image); err != nil {
+				writePostError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write([]byte("ok"))
+			return
+		}
+		if content != "" {
+			if err := postTextEntry(content); err != nil {
+				writePostError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write([]byte("ok"))
+			return
+		}
+	}
+
+	content, err := postContent(r, body)
+	if err != nil {
+		http.Error(w, "invalid content", http.StatusBadRequest)
+		return
+	}
+	if content == "" {
+		http.Error(w, "empty", http.StatusBadRequest)
+		return
+	}
+	if err := postTextEntry(content); err != nil {
+		writePostError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte("ok"))
+}
+
+func writePostError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, http.ErrContentLength):
+		http.Error(w, "too large", http.StatusRequestEntityTooLarge)
+	case errors.Is(err, errNoContentField):
+		http.Error(w, "empty", http.StatusBadRequest)
+	default:
+		http.Error(w, "save error", http.StatusInternalServerError)
+	}
+}
+
+func serveAsset(w http.ResponseWriter, r *http.Request) {
+	assetID := strings.TrimPrefix(r.URL.Path, "/api/assets/")
+	cleanID := filepath.Clean(assetID)
+	if cleanID == "." || strings.HasPrefix(cleanID, "..") || filepath.IsAbs(cleanID) {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(assetDir(), cleanID))
 }
 
 func main() {

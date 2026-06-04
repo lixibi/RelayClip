@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -132,6 +136,85 @@ func TestPostAcceptsMultipartShortcutContent(t *testing.T) {
 
 	if got := getEntry(0); got != content {
 		t.Fatalf("stored multipart content mismatch\n got: %q\nwant: %q", got, content)
+	}
+}
+
+func TestPostItemsAcceptsImageAndCreatesThumbnail(t *testing.T) {
+	resetTestState(t)
+
+	var imageData bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 16, 10))
+	for y := 0; y < 10; y++ {
+		for x := 0; x < 16; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 10), G: uint8(y * 20), B: 120, A: 255})
+		}
+	}
+	if err := png.Encode(&imageData, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("image", "sample.png")
+	if err != nil {
+		t.Fatalf("create image field: %v", err)
+	}
+	if _, err := part.Write(imageData.Bytes()); err != nil {
+		t.Fatalf("write image field: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/items", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("post status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/items", nil)
+	listRec := httptest.NewRecorder()
+	handler(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d", listRec.Code, http.StatusOK)
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items length = %d, want 1", len(items))
+	}
+	if got := items[0]["kind"]; got != "image" {
+		t.Fatalf("kind = %v, want image", got)
+	}
+	if got := items[0]["mime_type"]; got != "image/png" {
+		t.Fatalf("mime_type = %v, want image/png", got)
+	}
+	if got := int(items[0]["width"].(float64)); got != 16 {
+		t.Fatalf("width = %d, want 16", got)
+	}
+	if got := int(items[0]["height"].(float64)); got != 10 {
+		t.Fatalf("height = %d, want 10", got)
+	}
+
+	thumbnailURL, ok := items[0]["thumbnail_url"].(string)
+	if !ok || thumbnailURL == "" {
+		t.Fatalf("thumbnail_url missing: %#v", items[0])
+	}
+	thumbReq := httptest.NewRequest(http.MethodGet, thumbnailURL, nil)
+	thumbRec := httptest.NewRecorder()
+	handler(thumbRec, thumbReq)
+	if thumbRec.Code != http.StatusOK {
+		t.Fatalf("thumbnail status = %d, want %d", thumbRec.Code, http.StatusOK)
+	}
+	if _, _, err := image.Decode(bytes.NewReader(thumbRec.Body.Bytes())); err != nil {
+		t.Fatalf("decode thumbnail: %v", err)
 	}
 }
 
