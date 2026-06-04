@@ -2,10 +2,20 @@
 
 TextSync iOS is a native SwiftUI client for syncing text through a lightweight relay server. It targets iOS 16, stores the server address locally on device, and can work with any reachable TextSync server.
 
+> 推荐优先使用 iOS 版本：这是 TextSync 的主要客户端，支持完整的文本中转、历史缓存、本地编辑、快捷指令和自部署服务器配置。
+
 <p>
+  <img src="TextSync/Assets.xcassets/AppIcon.appiconset/icon-1024.png" alt="TextSync app icon" width="96">
+  <br>
   <img src="docs/images/textsync-home.jpg" alt="TextSync latest text screen" width="320">
   <img src="docs/images/textsync-history.jpg" alt="TextSync history screen" width="320">
 </p>
+
+## 重点下载
+
+- **iOS 版 IPA：**[最新 iOS Release](https://github.com/lixibi/iosTextSync/releases/tag/latest-ipa)
+- macOS 菜单栏版：[最新 macOS Release](https://github.com/lixibi/iosTextSync/releases/tag/latest-macos)
+- Docker 服务端：`docker pull ghcr.io/lixibi/textsync-server:latest`
 
 ## 中文说明
 
@@ -23,9 +33,16 @@ TextSync 是一个轻量级“文本中转”工具：在服务器上运行一�
 - 快捷指令友好：提供上传剪贴板、获取远程文本等 Shortcuts 调用方式，适合做成一键复制/粘贴工作流。
 - 开源可改造：iOS 客户端、服务端、Docker 构建和 GitHub Actions 都放在同一个仓库里，方便按自己的使用习惯继续改。
 
+## 图标与视觉
+
+TextSync 的图标是一台带同步符号的小型中转设备，表达“把文本暂存到自己的中转站，再在另一台设备取回”的核心用途。图标延续 App 内部的柔和、轻量、可爱的方向，和界面里暖色卡片、青绿色强调色、圆润控件保持一致。
+
+界面设计参考了动物之森式的舒适氛围，但功能上仍保持工具 App 的直接性：第一屏优先显示最新文本、发送区和历史记录，常用动作尽量一键完成。
+
 常用入口：
 
 - iOS 安装包：查看 [最新 IPA Release](https://github.com/lixibi/iosTextSync/releases/tag/latest-ipa)
+- macOS 菜单栏版：查看 [最新 macOS Release](https://github.com/lixibi/iosTextSync/releases/tag/latest-macos)
 - Docker 镜像：`docker pull ghcr.io/lixibi/textsync-server:latest`
 - 服务端说明：查看 [server/README.md](server/README.md)
 - 自动构建：查看 [GitHub Actions](https://github.com/lixibi/iosTextSync/actions)
@@ -49,6 +66,7 @@ docker run -d \
 ## Features
 
 - Native SwiftUI app for iOS 16 +
+- iOS-first client experience with IPA releases pinned as the primary download
 - Warm card-based interface inspired by cozy life-sim UI patterns
 - Self-hosted lightweight relay server
 - Fast text upload, fetch, copy, and paste workflows
@@ -56,6 +74,7 @@ docker run -d \
 - Local pinning and hiding without mutating remote data
 - Editable server address with HTTP and HTTPS support
 - Shortcuts actions for clipboard upload and remote text fetch
+- Optional macOS menu bar binary release for desktop clipboard workflows
 
 ## Server API
 
