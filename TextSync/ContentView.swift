@@ -124,9 +124,16 @@ final class TextSyncService {
 
     func listEntries(serverAddress: String) async throws -> [SyncEntry] {
         let url = try endpoint("/api/list", serverAddress: serverAddress)
-        let (data, response) = try await session.data(from: url)
+        let (data, response) = try await session.data(for: getRequest(url: url))
         try validate(response)
         return try decoder.decode([SyncEntry].self, from: data)
+    }
+
+    func latestContent(serverAddress: String) async throws -> String {
+        let url = try endpoint("/api/get", serverAddress: serverAddress)
+        let (data, response) = try await session.data(for: getRequest(url: url))
+        try validate(response)
+        return String(decoding: data, as: UTF8.self)
     }
 
     func post(_ text: String, serverAddress: String) async throws {
@@ -155,6 +162,13 @@ final class TextSyncService {
             throw TextSyncError.invalidServer
         }
         return url
+    }
+
+    private func getRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        return request
     }
 
     private func validate(_ response: URLResponse) throws {

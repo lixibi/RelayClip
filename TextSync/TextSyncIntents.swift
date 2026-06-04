@@ -73,15 +73,20 @@ struct FetchRemoteTextIntent: AppIntent {
             return .result(dialog: "请先在 TextSync 中设置服务器地址")
         }
 
-        let entries = try await TextSyncService().listEntries(serverAddress: serverAddress)
-        guard let latest = entries.last else {
+        let service = TextSyncService()
+        let latestContent = try await service.latestContent(serverAddress: serverAddress)
+        guard !latestContent.isEmpty else {
             return .result(dialog: "服务器暂无文本")
         }
 
+        let entries = (try? await service.listEntries(serverAddress: serverAddress)) ?? []
+
         try await MainActor.run {
             let store = TextSyncLocalStore()
-            try store.merge(entries, serverAddress: serverAddress, preserveLocalEdits: true)
-            UIPasteboard.general.string = latest.content
+            if !entries.isEmpty {
+                try store.merge(entries, serverAddress: serverAddress, preserveLocalEdits: true)
+            }
+            UIPasteboard.general.string = latestContent
         }
 
         return .result(dialog: "已复制远程最新文本")
