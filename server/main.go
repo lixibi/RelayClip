@@ -24,19 +24,21 @@ import (
 )
 
 type Entry struct {
-	ID           int       `json:"id"`
-	Time         time.Time `json:"time"`
-	Content      string    `json:"content"`
-	Kind         string    `json:"kind,omitempty"`
-	MimeType     string    `json:"mime_type,omitempty"`
-	AssetID      string    `json:"asset_id,omitempty"`
-	AssetURL     string    `json:"asset_url,omitempty"`
-	ThumbnailID  string    `json:"thumbnail_id,omitempty"`
-	ThumbnailURL string    `json:"thumbnail_url,omitempty"`
-	FileName     string    `json:"file_name,omitempty"`
-	Width        int       `json:"width,omitempty"`
-	Height       int       `json:"height,omitempty"`
-	ByteCount    int       `json:"byte_count,omitempty"`
+	ID           int        `json:"id"`
+	Time         time.Time  `json:"time"`
+	Content      string     `json:"content"`
+	Kind         string     `json:"kind,omitempty"`
+	Category     string     `json:"category,omitempty"`
+	MimeType     string     `json:"mime_type,omitempty"`
+	AssetID      string     `json:"asset_id,omitempty"`
+	AssetURL     string     `json:"asset_url,omitempty"`
+	ThumbnailID  string     `json:"thumbnail_id,omitempty"`
+	ThumbnailURL string     `json:"thumbnail_url,omitempty"`
+	FileName     string     `json:"file_name,omitempty"`
+	Width        int        `json:"width,omitempty"`
+	Height       int        `json:"height,omitempty"`
+	ByteCount    int        `json:"byte_count,omitempty"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
 }
 
 var (
@@ -69,6 +71,9 @@ func withAssetURLs(entry Entry) Entry {
 	if entry.Kind == "" {
 		entry.Kind = "text"
 	}
+	if entry.Category == "" {
+		entry.Category = categoryForEntry(entry)
+	}
 	if entry.AssetID != "" {
 		entry.AssetURL = "/api/assets/" + entry.AssetID
 	}
@@ -76,6 +81,18 @@ func withAssetURLs(entry Entry) Entry {
 		entry.ThumbnailURL = "/api/assets/" + entry.ThumbnailID
 	}
 	return entry
+}
+
+func categoryForEntry(entry Entry) string {
+	if strings.EqualFold(entry.Kind, "image") {
+		return "image"
+	}
+	content := strings.TrimSpace(entry.Content)
+	lower := strings.ToLower(content)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return "link"
+	}
+	return "text"
 }
 
 func load() {
@@ -132,19 +149,20 @@ func getEntry(offset int) string {
 	mu.RLock()
 	defer mu.RUnlock()
 
-	if len(entries) == 0 {
+	active := activeEntriesLocked()
+	if len(active) == 0 {
 		return ""
 	}
 
-	idx := len(entries) - 1 + offset
+	idx := len(active) - 1 + offset
 	if idx < 0 {
 		idx = 0
 	}
-	if idx >= len(entries) {
-		idx = len(entries) - 1
+	if idx >= len(active) {
+		idx = len(active) - 1
 	}
 
-	return entries[idx].Content
+	return active[idx].Content
 }
 
 func getByID(id int) string {
@@ -152,12 +170,13 @@ func getByID(id int) string {
 	defer mu.RUnlock()
 
 	for _, e := range entries {
-		if e.ID == id {
+		if e.ID == id && e.DeletedAt == nil {
 			return e.Content
 		}
 	}
-	if len(entries) > 0 {
-		return entries[len(entries)-1].Content
+	active := activeEntriesLocked()
+	if len(active) > 0 {
+		return active[len(active)-1].Content
 	}
 	return ""
 }
@@ -166,37 +185,72 @@ func latestEntry() *Entry {
 	mu.RLock()
 	defer mu.RUnlock()
 
-	if len(entries) == 0 {
-		return nil
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].DeletedAt == nil {
+			entry := withAssetURLs(entries[i])
+			return &entry
+		}
 	}
-	entry := withAssetURLs(entries[len(entries)-1])
-	return &entry
+	return nil
 }
 
-func listEntries() []map[string]interface{} {
+func activeEntriesLocked() []Entry {
+	active := make([]Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.DeletedAt == nil {
+			active = append(active, entry)
+		}
+	}
+	return active
+}
+
+func listEntries(includeDeleted bool, trashOnly bool, category string) []map[string]interface{} {
 	mu.RLock()
 	defer mu.RUnlock()
 
-	list := make([]map[string]interface{}, len(entries))
-	for i, e := range entries {
+	list := make([]map[string]interface{}, 0, len(entries))
+	for _, e := range entries {
 		e = withAssetURLs(e)
-		list[i] = map[string]interface{}{
-			"id":            e.ID,
-			"time":          e.Time.Format(time.RFC3339),
-			"content":       e.Content,
-			"kind":          e.Kind,
-			"mime_type":     e.MimeType,
-			"asset_id":      e.AssetID,
-			"asset_url":     e.AssetURL,
-			"thumbnail_id":  e.ThumbnailID,
-			"thumbnail_url": e.ThumbnailURL,
-			"file_name":     e.FileName,
-			"width":         e.Width,
-			"height":        e.Height,
-			"byte_count":    e.ByteCount,
+		isDeleted := e.DeletedAt != nil
+		if trashOnly && !isDeleted {
+			continue
 		}
+		if !includeDeleted && isDeleted {
+			continue
+		}
+		if category != "" && category != "all" && e.Category != category {
+			continue
+		}
+		list = append(list, entryMap(e))
 	}
 	return list
+}
+
+func entryMap(e Entry) map[string]interface{} {
+	return map[string]interface{}{
+		"id":            e.ID,
+		"time":          e.Time.Format(time.RFC3339),
+		"content":       e.Content,
+		"kind":          e.Kind,
+		"category":      e.Category,
+		"mime_type":     e.MimeType,
+		"asset_id":      e.AssetID,
+		"asset_url":     e.AssetURL,
+		"thumbnail_id":  e.ThumbnailID,
+		"thumbnail_url": e.ThumbnailURL,
+		"file_name":     e.FileName,
+		"width":         e.Width,
+		"height":        e.Height,
+		"byte_count":    e.ByteCount,
+		"deleted_at":    deletedAtString(e.DeletedAt),
+	}
+}
+
+func deletedAtString(deletedAt *time.Time) interface{} {
+	if deletedAt == nil {
+		return nil
+	}
+	return deletedAt.Format(time.RFC3339)
 }
 
 func firstContentField(values map[string][]string) (string, bool) {
@@ -327,10 +381,11 @@ func postTextEntry(content string) error {
 	}
 
 	entry := Entry{
-		ID:      nextEntryID(),
-		Time:    time.Now(),
-		Content: content,
-		Kind:    "text",
+		ID:       nextEntryID(),
+		Time:     time.Now(),
+		Content:  content,
+		Kind:     "text",
+		Category: categoryForEntry(Entry{Kind: "text", Content: content}),
 	}
 	return appendEntry(entry)
 }
@@ -341,6 +396,73 @@ func postImageEntry(upload *uploadedImage) error {
 		return err
 	}
 	return appendEntry(entry)
+}
+
+func softDeleteEntry(id int) bool {
+	now := time.Now()
+	mu.Lock()
+	for i := range entries {
+		if entries[i].ID == id {
+			if entries[i].DeletedAt == nil {
+				entries[i].DeletedAt = &now
+			}
+			mu.Unlock()
+			return save() == nil
+		}
+	}
+	mu.Unlock()
+	return false
+}
+
+func restoreEntry(id int) bool {
+	mu.Lock()
+	for i := range entries {
+		if entries[i].ID == id {
+			entries[i].DeletedAt = nil
+			mu.Unlock()
+			return save() == nil
+		}
+	}
+	mu.Unlock()
+	return false
+}
+
+func permanentlyDeleteEntry(id int) bool {
+	var removed Entry
+	found := false
+
+	mu.Lock()
+	for i := range entries {
+		if entries[i].ID == id {
+			removed = entries[i]
+			entries = append(entries[:i], entries[i+1:]...)
+			found = true
+			break
+		}
+	}
+	mu.Unlock()
+
+	if !found {
+		return false
+	}
+	if err := save(); err != nil {
+		return false
+	}
+	removeAssetFiles(removed)
+	return true
+}
+
+func removeAssetFiles(entry Entry) {
+	for _, assetID := range []string{entry.AssetID, entry.ThumbnailID} {
+		if assetID == "" {
+			continue
+		}
+		cleanID := filepath.Clean(assetID)
+		if cleanID == "." || strings.HasPrefix(cleanID, "..") || filepath.IsAbs(cleanID) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(assetDir(), cleanID))
+	}
 }
 
 type uploadedImage struct {
@@ -515,6 +637,7 @@ func storeImageAsset(upload *uploadedImage, id int) (Entry, error) {
 		Time:        time.Now(),
 		Content:     content,
 		Kind:        "image",
+		Category:    "image",
 		MimeType:    upload.mimeType,
 		AssetID:     assetID,
 		ThumbnailID: thumbnailID,
@@ -571,6 +694,10 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		serveAsset(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/api/items/") {
+		handleItemByID(w, r)
+		return
+	}
 
 	switch r.URL.Path {
 	case "/":
@@ -598,7 +725,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		handlePostText(w, r)
 
 	case "/api/list":
-		list := listEntries()
+		list := listFromRequest(r)
 		data, _ := json.Marshal(list)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
@@ -606,7 +733,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	case "/api/items":
 		switch r.Method {
 		case http.MethodGet:
-			list := listEntries()
+			list := listFromRequest(r)
 			data, _ := json.Marshal(list)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(data)
@@ -626,9 +753,68 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 
+	case "/api/trash":
+		list := listEntries(true, true, normalizedCategory(r.URL.Query().Get("category")))
+		data, _ := json.Marshal(list)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func listFromRequest(r *http.Request) []map[string]interface{} {
+	query := r.URL.Query()
+	trashOnly := query.Get("trash") == "1" || strings.EqualFold(query.Get("trash"), "true")
+	includeDeleted := trashOnly || query.Get("include_deleted") == "1" || strings.EqualFold(query.Get("include_deleted"), "true")
+	return listEntries(includeDeleted, trashOnly, normalizedCategory(query.Get("category")))
+}
+
+func normalizedCategory(category string) string {
+	return strings.ToLower(strings.TrimSpace(category))
+}
+
+func handleItemByID(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/items/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	id, err := strconv.Atoi(parts[0])
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+
+	switch {
+	case r.Method == http.MethodDelete && action == "":
+		if r.URL.Query().Get("permanent") == "1" {
+			writeBoolResult(w, permanentlyDeleteEntry(id))
+			return
+		}
+		writeBoolResult(w, softDeleteEntry(id))
+	case r.Method == http.MethodPost && action == "restore":
+		writeBoolResult(w, restoreEntry(id))
+	case r.Method == http.MethodDelete && action == "permanent":
+		writeBoolResult(w, permanentlyDeleteEntry(id))
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func writeBoolResult(w http.ResponseWriter, ok bool) {
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte("ok"))
 }
 
 func handlePostText(w http.ResponseWriter, r *http.Request) {

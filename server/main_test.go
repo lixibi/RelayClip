@@ -218,6 +218,98 @@ func TestPostItemsAcceptsImageAndCreatesThumbnail(t *testing.T) {
 	}
 }
 
+func TestDeleteMovesEntryToTrashAndRestore(t *testing.T) {
+	resetTestState(t)
+
+	for _, content := range []string{"https://example.com", "普通文本"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/post", strings.NewReader(content))
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("post status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+
+	linkReq := httptest.NewRequest(http.MethodGet, "/api/items?category=link", nil)
+	linkRec := httptest.NewRecorder()
+	handler(linkRec, linkReq)
+	if linkRec.Code != http.StatusOK {
+		t.Fatalf("link list status = %d, want %d", linkRec.Code, http.StatusOK)
+	}
+	var linkItems []map[string]interface{}
+	if err := json.Unmarshal(linkRec.Body.Bytes(), &linkItems); err != nil {
+		t.Fatalf("decode link list: %v", err)
+	}
+	if len(linkItems) != 1 || linkItems[0]["category"] != "link" {
+		t.Fatalf("link category list mismatch: %#v", linkItems)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/items/0", nil)
+	deleteRec := httptest.NewRecorder()
+	handler(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want %d: %s", deleteRec.Code, http.StatusOK, deleteRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/items", nil)
+	listRec := httptest.NewRecorder()
+	handler(listRec, listReq)
+	var activeItems []map[string]interface{}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &activeItems); err != nil {
+		t.Fatalf("decode active list: %v", err)
+	}
+	if len(activeItems) != 1 || int(activeItems[0]["id"].(float64)) != 1 {
+		t.Fatalf("active list after delete mismatch: %#v", activeItems)
+	}
+
+	trashReq := httptest.NewRequest(http.MethodGet, "/api/trash", nil)
+	trashRec := httptest.NewRecorder()
+	handler(trashRec, trashReq)
+	var trashItems []map[string]interface{}
+	if err := json.Unmarshal(trashRec.Body.Bytes(), &trashItems); err != nil {
+		t.Fatalf("decode trash list: %v", err)
+	}
+	if len(trashItems) != 1 || int(trashItems[0]["id"].(float64)) != 0 || trashItems[0]["deleted_at"] == nil {
+		t.Fatalf("trash list mismatch: %#v", trashItems)
+	}
+
+	restoreReq := httptest.NewRequest(http.MethodPost, "/api/items/0/restore", nil)
+	restoreRec := httptest.NewRecorder()
+	handler(restoreRec, restoreReq)
+	if restoreRec.Code != http.StatusOK {
+		t.Fatalf("restore status = %d, want %d: %s", restoreRec.Code, http.StatusOK, restoreRec.Body.String())
+	}
+
+	restoredReq := httptest.NewRequest(http.MethodGet, "/api/items", nil)
+	restoredRec := httptest.NewRecorder()
+	handler(restoredRec, restoredReq)
+	var restoredItems []map[string]interface{}
+	if err := json.Unmarshal(restoredRec.Body.Bytes(), &restoredItems); err != nil {
+		t.Fatalf("decode restored list: %v", err)
+	}
+	if len(restoredItems) != 2 {
+		t.Fatalf("restored list length = %d, want 2", len(restoredItems))
+	}
+
+	permanentReq := httptest.NewRequest(http.MethodDelete, "/api/items/0/permanent", nil)
+	permanentRec := httptest.NewRecorder()
+	handler(permanentRec, permanentReq)
+	if permanentRec.Code != http.StatusOK {
+		t.Fatalf("permanent delete status = %d, want %d: %s", permanentRec.Code, http.StatusOK, permanentRec.Body.String())
+	}
+
+	allReq := httptest.NewRequest(http.MethodGet, "/api/items?include_deleted=1", nil)
+	allRec := httptest.NewRecorder()
+	handler(allRec, allReq)
+	var allItems []map[string]interface{}
+	if err := json.Unmarshal(allRec.Body.Bytes(), &allItems); err != nil {
+		t.Fatalf("decode all list: %v", err)
+	}
+	if len(allItems) != 1 || int(allItems[0]["id"].(float64)) != 1 {
+		t.Fatalf("all list after permanent delete mismatch: %#v", allItems)
+	}
+}
+
 func TestPostDoesNotTruncateAfter128Runes(t *testing.T) {
 	resetTestState(t)
 

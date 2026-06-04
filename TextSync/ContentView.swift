@@ -8,6 +8,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
     let time: Date
     let content: String
     let kind: String
+    let category: String
     let mimeType: String?
     let assetURL: String?
     let thumbnailURL: String?
@@ -15,6 +16,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
     let width: Int?
     let height: Int?
     let byteCount: Int?
+    let deletedAt: Date?
     let isPinned: Bool
     let isLocallyEdited: Bool
     let isHidden: Bool
@@ -24,6 +26,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         time: Date,
         content: String,
         kind: String = "text",
+        category: String = "",
         mimeType: String? = nil,
         assetURL: String? = nil,
         thumbnailURL: String? = nil,
@@ -31,6 +34,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         width: Int? = nil,
         height: Int? = nil,
         byteCount: Int? = nil,
+        deletedAt: Date? = nil,
         isPinned: Bool = false,
         isLocallyEdited: Bool = false,
         isHidden: Bool = false
@@ -39,6 +43,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         self.time = time
         self.content = content
         self.kind = kind.isEmpty ? "text" : kind
+        self.category = category.isEmpty ? SyncEntry.defaultCategory(kind: kind, content: content) : category
         self.mimeType = mimeType
         self.assetURL = assetURL
         self.thumbnailURL = thumbnailURL
@@ -46,6 +51,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         self.width = width
         self.height = height
         self.byteCount = byteCount
+        self.deletedAt = deletedAt
         self.isPinned = isPinned
         self.isLocallyEdited = isLocallyEdited
         self.isHidden = isHidden
@@ -56,6 +62,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         case time
         case content
         case kind
+        case category
         case mimeType = "mime_type"
         case assetURL = "asset_url"
         case thumbnailURL = "thumbnail_url"
@@ -63,6 +70,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         case width
         case height
         case byteCount = "byte_count"
+        case deletedAt = "deleted_at"
     }
 
     init(from decoder: Decoder) throws {
@@ -71,6 +79,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         time = try container.decode(Date.self, forKey: .time)
         content = try container.decode(String.self, forKey: .content)
         kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "text"
+        category = try container.decodeIfPresent(String.self, forKey: .category) ?? SyncEntry.defaultCategory(kind: kind, content: content)
         mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
         assetURL = try container.decodeIfPresent(String.self, forKey: .assetURL)
         thumbnailURL = try container.decodeIfPresent(String.self, forKey: .thumbnailURL)
@@ -78,6 +87,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         width = try container.decodeIfPresent(Int.self, forKey: .width)
         height = try container.decodeIfPresent(Int.self, forKey: .height)
         byteCount = try container.decodeIfPresent(Int.self, forKey: .byteCount)
+        deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
         isPinned = false
         isLocallyEdited = false
         isHidden = false
@@ -85,6 +95,14 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
 
     var isImage: Bool {
         kind == "image"
+    }
+
+    var isServerDeleted: Bool {
+        deletedAt != nil
+    }
+
+    var normalizedCategory: String {
+        category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     var imageDetailText: String {
@@ -114,6 +132,44 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
             return nil
         }
         return URL(string: rawValue, relativeTo: baseURL)?.absoluteURL
+    }
+
+    private static func defaultCategory(kind: String, content: String) -> String {
+        if kind.lowercased() == "image" {
+            return "image"
+        }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return "link"
+        }
+        return "text"
+    }
+}
+
+enum EntryCategoryFilter: String, CaseIterable, Identifiable {
+    case all
+    case text
+    case image
+    case link
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "全部"
+        case .text: return "文本"
+        case .image: return "图片"
+        case .link: return "链接"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .all: return "square.grid.2x2"
+        case .text: return "text.alignleft"
+        case .image: return "photo"
+        case .link: return "link"
+        }
     }
 }
 
@@ -202,8 +258,22 @@ final class TextSyncService {
         decoder.dateDecodingStrategy = .iso8601
     }
 
-    func listEntries(serverAddress: String) async throws -> [SyncEntry] {
-        let url = try endpoint("/api/list", serverAddress: serverAddress)
+    func listEntries(serverAddress: String, includeDeleted: Bool = false, category: EntryCategoryFilter = .all) async throws -> [SyncEntry] {
+        var queryItems: [URLQueryItem] = []
+        if includeDeleted {
+            queryItems.append(URLQueryItem(name: "include_deleted", value: "1"))
+        }
+        if category != .all {
+            queryItems.append(URLQueryItem(name: "category", value: category.rawValue))
+        }
+        let url = try endpoint("/api/list", serverAddress: serverAddress, queryItems: queryItems)
+        let (data, response) = try await session.data(for: getRequest(url: url))
+        try validate(response)
+        return try decoder.decode([SyncEntry].self, from: data)
+    }
+
+    func trashEntries(serverAddress: String) async throws -> [SyncEntry] {
+        let url = try endpoint("/api/trash", serverAddress: serverAddress)
         let (data, response) = try await session.data(for: getRequest(url: url))
         try validate(response)
         return try decoder.decode([SyncEntry].self, from: data)
@@ -250,17 +320,32 @@ final class TextSyncService {
         return data
     }
 
+    func deleteEntry(_ entry: SyncEntry, serverAddress: String, permanently: Bool = false) async throws {
+        let path = permanently ? "/api/items/\(entry.id)/permanent" : "/api/items/\(entry.id)"
+        var request = URLRequest(url: try endpoint(path, serverAddress: serverAddress))
+        request.httpMethod = "DELETE"
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
+    func restoreEntry(_ entry: SyncEntry, serverAddress: String) async throws {
+        var request = URLRequest(url: try endpoint("/api/items/\(entry.id)/restore", serverAddress: serverAddress))
+        request.httpMethod = "POST"
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     func testConnection(serverAddress: String) async throws -> Int {
         try await listEntries(serverAddress: serverAddress).count
     }
 
-    private func endpoint(_ path: String, serverAddress: String) throws -> URL {
+    private func endpoint(_ path: String, serverAddress: String, queryItems: [URLQueryItem] = []) throws -> URL {
         let normalized = try ServerAddress.normalized(serverAddress)
         guard var components = URLComponents(string: normalized) else {
             throw TextSyncError.invalidServer
         }
         components.path = path
-        components.query = nil
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
         guard let url = components.url else {
             throw TextSyncError.invalidServer
         }
@@ -324,6 +409,11 @@ final class TextSyncLocalStore {
         kind.attributeType = .stringAttributeType
         kind.isOptional = true
 
+        let category = NSAttributeDescription()
+        category.name = "category"
+        category.attributeType = .stringAttributeType
+        category.isOptional = true
+
         let mimeType = NSAttributeDescription()
         mimeType.name = "mimeType"
         mimeType.attributeType = .stringAttributeType
@@ -359,6 +449,11 @@ final class TextSyncLocalStore {
         byteCount.attributeType = .integer64AttributeType
         byteCount.isOptional = true
 
+        let serverDeletedAt = NSAttributeDescription()
+        serverDeletedAt.name = "serverDeletedAt"
+        serverDeletedAt.attributeType = .dateAttributeType
+        serverDeletedAt.isOptional = true
+
         let serverAddress = NSAttributeDescription()
         serverAddress.name = "serverAddress"
         serverAddress.attributeType = .stringAttributeType
@@ -387,6 +482,7 @@ final class TextSyncLocalStore {
             time,
             content,
             kind,
+            category,
             mimeType,
             assetURL,
             thumbnailURL,
@@ -394,6 +490,7 @@ final class TextSyncLocalStore {
             width,
             height,
             byteCount,
+            serverDeletedAt,
             serverAddress,
             isDeleted,
             isPinned,
@@ -444,11 +541,23 @@ final class TextSyncLocalStore {
         let request = NSFetchRequest<NSManagedObject>(entityName: "CachedEntry")
         let serverKey = cacheServerKey(serverAddress)
         if serverKey.isEmpty {
-            request.predicate = NSPredicate(format: "isDeleted == YES")
+            request.predicate = NSPredicate(format: "isDeleted == YES AND serverDeletedAt == nil")
         } else {
-            request.predicate = NSPredicate(format: "isDeleted == YES AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
+            request.predicate = NSPredicate(format: "isDeleted == YES AND serverDeletedAt == nil AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
         }
         request.sortDescriptors = [NSSortDescriptor(key: "id", ascending: true)]
+        return try container.viewContext.fetch(request).compactMap(makeEntry)
+    }
+
+    func trashEntries(serverAddress: String) throws -> [SyncEntry] {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "CachedEntry")
+        let serverKey = cacheServerKey(serverAddress)
+        if serverKey.isEmpty {
+            request.predicate = NSPredicate(format: "serverDeletedAt != nil")
+        } else {
+            request.predicate = NSPredicate(format: "serverDeletedAt != nil AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
+        }
+        request.sortDescriptors = [NSSortDescriptor(key: "id", ascending: false)]
         return try container.viewContext.fetch(request).compactMap(makeEntry)
     }
 
@@ -456,11 +565,13 @@ final class TextSyncLocalStore {
         let request = NSFetchRequest<NSManagedObject>(entityName: "CachedEntry")
         let serverKey = cacheServerKey(serverAddress)
         if serverKey.isEmpty {
-            request.predicate = includeHidden ? nil : NSPredicate(format: "isDeleted == NO")
+            request.predicate = includeHidden
+                ? NSPredicate(format: "serverDeletedAt == nil")
+                : NSPredicate(format: "isDeleted == NO AND serverDeletedAt == nil")
         } else {
             request.predicate = includeHidden
-                ? NSPredicate(format: "serverAddress == %@ OR serverAddress == nil", serverKey)
-                : NSPredicate(format: "isDeleted == NO AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
+                ? NSPredicate(format: "serverDeletedAt == nil AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
+                : NSPredicate(format: "isDeleted == NO AND serverDeletedAt == nil AND (serverAddress == %@ OR serverAddress == nil)", serverKey)
         }
         request.sortDescriptors = [NSSortDescriptor(key: "id", ascending: true)]
         return try container.viewContext.fetch(request).compactMap(makeEntry)
@@ -618,6 +729,7 @@ final class TextSyncLocalStore {
             time: time,
             content: content,
             kind: object.value(forKey: "kind") as? String ?? "text",
+            category: object.value(forKey: "category") as? String ?? "",
             mimeType: object.value(forKey: "mimeType") as? String,
             assetURL: object.value(forKey: "assetURL") as? String,
             thumbnailURL: object.value(forKey: "thumbnailURL") as? String,
@@ -625,6 +737,7 @@ final class TextSyncLocalStore {
             width: (object.value(forKey: "width") as? Int64).map(Int.init),
             height: (object.value(forKey: "height") as? Int64).map(Int.init),
             byteCount: (object.value(forKey: "byteCount") as? Int64).map(Int.init),
+            deletedAt: object.value(forKey: "serverDeletedAt") as? Date,
             isPinned: isPinned,
             isLocallyEdited: isLocallyEdited,
             isHidden: isHidden
@@ -633,6 +746,7 @@ final class TextSyncLocalStore {
 
     private func updateMetadata(on object: NSManagedObject, with entry: SyncEntry) {
         object.setValue(entry.kind, forKey: "kind")
+        object.setValue(entry.category, forKey: "category")
         object.setValue(entry.mimeType, forKey: "mimeType")
         object.setValue(entry.assetURL, forKey: "assetURL")
         object.setValue(entry.thumbnailURL, forKey: "thumbnailURL")
@@ -640,6 +754,7 @@ final class TextSyncLocalStore {
         object.setValue(entry.width.map { Int64($0) }, forKey: "width")
         object.setValue(entry.height.map { Int64($0) }, forKey: "height")
         object.setValue(entry.byteCount.map { Int64($0) }, forKey: "byteCount")
+        object.setValue(entry.deletedAt, forKey: "serverDeletedAt")
     }
 
     private func saveIfNeeded() throws {
@@ -668,6 +783,8 @@ final class TextSyncViewModel: ObservableObject {
     @Published var latestDraft = ""
     @Published var entries: [SyncEntry] = []
     @Published var hiddenEntries: [SyncEntry] = []
+    @Published var trashEntries: [SyncEntry] = []
+    @Published var selectedCategory: EntryCategoryFilter = .all
     @Published var visibleHistoryCount = 10
     @Published var isLoading = false
     @Published var isSending = false
@@ -690,12 +807,17 @@ final class TextSyncViewModel: ObservableObject {
         entries.last
     }
 
+    var filteredEntries: [SyncEntry] {
+        guard selectedCategory != .all else { return entries }
+        return entries.filter { $0.normalizedCategory == selectedCategory.rawValue }
+    }
+
     var history: [SyncEntry] {
-        Array(entries.filter { !$0.isPinned }.reversed())
+        Array(filteredEntries.filter { !$0.isPinned }.reversed())
     }
 
     var pinnedEntries: [SyncEntry] {
-        Array(entries.filter(\.isPinned).reversed())
+        Array(filteredEntries.filter(\.isPinned).reversed())
     }
 
     var visibleHistory: [SyncEntry] {
@@ -714,10 +836,16 @@ final class TextSyncViewModel: ObservableObject {
         visibleHistoryCount < history.count
     }
 
+    func count(for category: EntryCategoryFilter) -> Int {
+        guard category != .all else { return entries.count }
+        return entries.filter { $0.normalizedCategory == category.rawValue }.count
+    }
+
     func loadCachedEntries() {
         do {
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
             hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            trashEntries = try localStore.trashEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
         } catch {
@@ -736,15 +864,16 @@ final class TextSyncViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let remoteEntries = try await service.listEntries(serverAddress: serverAddress)
+            let remoteEntries = try await service.listEntries(serverAddress: serverAddress, includeDeleted: true)
             serverAddress = try ServerAddress.normalized(serverAddress)
             try localStore.merge(remoteEntries, serverAddress: serverAddress, preserveLocalEdits: !allowOverwriteLocalEdits)
             try localStore.saveServerAddress(serverAddress)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
             hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            trashEntries = try localStore.trashEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
-            message = entries.isEmpty ? "服务器暂无文本" : "已同步最新文本"
+            message = entries.isEmpty ? "服务器暂无内容" : "已同步最新内容"
         } catch {
             loadCachedEntries()
             message = error.localizedDescription
@@ -809,6 +938,7 @@ final class TextSyncViewModel: ObservableObject {
             try localStore.markHidden(id: entry.id, serverAddress: serverAddress, isHidden: true)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
             hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            trashEntries = try localStore.trashEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
             message = "已从本机历史隐藏"
@@ -825,6 +955,7 @@ final class TextSyncViewModel: ObservableObject {
             try localStore.restoreHiddenEntries(ids: ids, serverAddress: serverAddress)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
             hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            trashEntries = try localStore.trashEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
             message = ids.count > 1 ? "已显示 \(ids.count) 条隐藏记录" : "已显示隐藏记录"
@@ -838,6 +969,7 @@ final class TextSyncViewModel: ObservableObject {
             try localStore.markPinned(id: entry.id, serverAddress: serverAddress, isPinned: !entry.isPinned)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
             hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            trashEntries = try localStore.trashEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
             message = entry.isPinned ? "已取消置顶" : "已置顶"
@@ -896,6 +1028,7 @@ final class TextSyncViewModel: ObservableObject {
             try localStore.saveLocalContent(id: latest.id, serverAddress: serverAddress, content: content)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
             hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            trashEntries = try localStore.trashEntries(serverAddress: serverAddress)
         } catch {
             message = "本地编辑保存失败"
         }
@@ -906,6 +1039,7 @@ final class TextSyncViewModel: ObservableObject {
             try localStore.saveLocalContent(id: entry.id, serverAddress: serverAddress, content: content)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
             hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            trashEntries = try localStore.trashEntries(serverAddress: serverAddress)
             syncLatestDraft()
             message = "本地修改已保存"
         } catch {
@@ -929,11 +1063,57 @@ final class TextSyncViewModel: ObservableObject {
             try localStore.replaceWithRemote(remoteEntry, serverAddress: serverAddress)
             entries = try localStore.visibleEntries(serverAddress: serverAddress)
             hiddenEntries = try localStore.hiddenEntries(serverAddress: serverAddress)
+            trashEntries = try localStore.trashEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
             message = "已用云端更新 #\(entry.id)"
         } catch {
             message = "更新失败：\(error.localizedDescription)"
+        }
+    }
+
+    func deleteRemote(_ entry: SyncEntry) async {
+        guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message = "请先设置服务器地址"
+            return
+        }
+
+        do {
+            try await service.deleteEntry(entry, serverAddress: serverAddress)
+            await refresh(allowOverwriteLocalEdits: false)
+            message = "已删除到回收站"
+        } catch {
+            message = "删除失败：\(error.localizedDescription)"
+        }
+    }
+
+    func restoreRemote(_ entry: SyncEntry) async {
+        guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message = "请先设置服务器地址"
+            return
+        }
+
+        do {
+            try await service.restoreEntry(entry, serverAddress: serverAddress)
+            await refresh(allowOverwriteLocalEdits: false)
+            message = "已从回收站恢复"
+        } catch {
+            message = "恢复失败：\(error.localizedDescription)"
+        }
+    }
+
+    func permanentlyDeleteRemote(_ entry: SyncEntry) async {
+        guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message = "请先设置服务器地址"
+            return
+        }
+
+        do {
+            try await service.deleteEntry(entry, serverAddress: serverAddress, permanently: true)
+            await refresh(allowOverwriteLocalEdits: false)
+            message = "已永久删除"
+        } catch {
+            message = "永久删除失败：\(error.localizedDescription)"
         }
     }
 
@@ -962,6 +1142,7 @@ final class TextSyncViewModel: ObservableObject {
             try localStore.resetCachedEntries(serverAddress: serverAddress)
             entries = []
             hiddenEntries = []
+            trashEntries = []
             latestDraft = ""
             visibleHistoryCount = pageSize
             message = "本地数据已重置"
@@ -1104,6 +1285,7 @@ struct ContentView: View {
     @StateObject private var viewModel = TextSyncViewModel()
     @State private var isSettingsPresented = false
     @State private var isHelpPresented = false
+    @State private var isTrashPresented = false
     @State private var editingEntry: SyncEntry?
     @State private var editingText = ""
 
@@ -1138,6 +1320,12 @@ struct ContentView: View {
                     }
                     .textSyncListRow()
 
+                    CategoryFilterView(
+                        selectedCategory: $viewModel.selectedCategory,
+                        countProvider: { viewModel.count(for: $0) }
+                    )
+                    .textSyncListRow()
+
                     HistorySection(
                         pinnedEntries: viewModel.pinnedEntries,
                         items: viewModel.visibleHistoryItems,
@@ -1156,6 +1344,9 @@ struct ContentView: View {
                         },
                         pinAction: { viewModel.togglePinned($0) },
                         hideAction: { viewModel.hideLocal($0) },
+                        deleteAction: { entry in
+                            Task { await viewModel.deleteRemote(entry) }
+                        },
                         restoreHiddenAction: { viewModel.restoreHidden($0) },
                         loadMoreAction: { viewModel.loadMoreHistory() }
                     )
@@ -1183,6 +1374,13 @@ struct ContentView: View {
                         Image(systemName: "questionmark.circle")
                     }
                     .accessibilityLabel("帮助")
+
+                    Button {
+                        isTrashPresented = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .accessibilityLabel("回收站")
                 }
             }
             .task {
@@ -1210,6 +1408,19 @@ struct ContentView: View {
             .sheet(isPresented: $isHelpPresented) {
                 HelpView()
                     .presentationDetents([.large])
+            }
+            .sheet(isPresented: $isTrashPresented) {
+                TrashView(
+                    entries: viewModel.trashEntries,
+                    serverAddress: viewModel.serverAddress,
+                    restoreAction: { entry in
+                        Task { await viewModel.restoreRemote(entry) }
+                    },
+                    permanentDeleteAction: { entry in
+                        Task { await viewModel.permanentlyDeleteRemote(entry) }
+                    }
+                )
+                .presentationDetents([.medium, .large])
             }
             .sheet(item: $editingEntry) { entry in
                 EditHistoryEntryView(
@@ -1394,6 +1605,52 @@ private struct ComposerView: View {
     }
 }
 
+private struct CategoryFilterView: View {
+    @Binding var selectedCategory: EntryCategoryFilter
+    let countProvider: (EntryCategoryFilter) -> Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("分类")
+                .font(.headline)
+                .foregroundStyle(Color.textSyncBrown)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(EntryCategoryFilter.allCases) { category in
+                        Button {
+                            selectedCategory = category
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: category.systemImage)
+                                Text(category.title)
+                                Text("\(countProvider(category))")
+                                    .font(.caption2.weight(.bold))
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(Color.white.opacity(selectedCategory == category ? 0.24 : 0.46)))
+                            }
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(selectedCategory == category ? .white : Color.textSyncBrown)
+                            .padding(.horizontal, 12)
+                            .frame(height: 36)
+                            .background(
+                                Capsule().fill(selectedCategory == category ? Color.textSyncTeal : Color.textSyncPaper)
+                            )
+                            .overlay(
+                                Capsule().stroke(Color.textSyncLine, lineWidth: selectedCategory == category ? 0 : 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
+    }
+}
+
 private struct HistorySection: View {
     let pinnedEntries: [SyncEntry]
     let items: [HistoryListItem]
@@ -1407,6 +1664,7 @@ private struct HistorySection: View {
     let updateFromCloudAction: (SyncEntry) -> Void
     let pinAction: (SyncEntry) -> Void
     let hideAction: (SyncEntry) -> Void
+    let deleteAction: (SyncEntry) -> Void
     let restoreHiddenAction: (HiddenEntryRange) -> Void
     let loadMoreAction: () -> Void
 
@@ -1521,6 +1779,12 @@ private struct HistorySection: View {
                 } label: {
                     Label("隐藏", systemImage: "eye.slash")
                 }
+
+                Button(role: .destructive) {
+                    deleteAction(entry)
+                } label: {
+                    Label("删除到回收站", systemImage: "trash")
+                }
             }
             .accessibilityAddTraits(.isButton)
             .accessibilityAction(named: "复制") {
@@ -1532,6 +1796,12 @@ private struct HistorySection: View {
                 }
             }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                deleteAction(entry)
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+
             Button(role: .destructive) {
                 hideAction(entry)
             } label: {
@@ -1547,6 +1817,72 @@ private struct HistorySection: View {
             .tint(Color.textSyncTeal)
         }
         .textSyncListRow()
+    }
+}
+
+private struct TrashView: View {
+    let entries: [SyncEntry]
+    let serverAddress: String
+    let restoreAction: (SyncEntry) -> Void
+    let permanentDeleteAction: (SyncEntry) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppBackground()
+
+                if entries.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 42, weight: .semibold))
+                        Text("回收站为空")
+                            .font(.headline)
+                        Text("删除到回收站的远端内容会显示在这里。")
+                            .font(.footnote)
+                    }
+                    .foregroundStyle(Color.textSyncMuted)
+                } else {
+                    List {
+                        ForEach(entries) { entry in
+                            VStack(alignment: .leading, spacing: 12) {
+                                HistoryRow(entry: entry, isLatest: false, serverAddress: serverAddress)
+
+                                HStack(spacing: 10) {
+                                    Button {
+                                        restoreAction(entry)
+                                    } label: {
+                                        Label("恢复", systemImage: "arrow.uturn.backward.circle.fill")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+
+                                    Button(role: .destructive) {
+                                        permanentDeleteAction(entry)
+                                    } label: {
+                                        Label("永久删除", systemImage: "trash.fill")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncWarning))
+                                }
+                            }
+                            .textSyncListRow()
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                }
+            }
+            .navigationTitle("回收站")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
