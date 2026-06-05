@@ -105,6 +105,14 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
+    var detectedURLs: [URL] {
+        SyncEntry.urls(in: content)
+    }
+
+    var primaryURL: URL? {
+        detectedURLs.first
+    }
+
     var imageDetailText: String {
         let size = width.flatMap { width in height.map { "\(width)×\($0)" } }
         let name = fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -143,6 +151,23 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
             return "link"
         }
         return "text"
+    }
+
+    private static func urls(in text: String) -> [URL] {
+        guard !text.isEmpty,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return []
+        }
+
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var seen = Set<String>()
+        return detector.matches(in: text, options: [], range: range).compactMap { match in
+            guard let url = match.url else { return nil }
+            let key = url.absoluteString
+            guard !seen.contains(key) else { return nil }
+            seen.insert(key)
+            return url
+        }
     }
 }
 
@@ -284,6 +309,13 @@ final class TextSyncService {
         let (data, response) = try await session.data(for: getRequest(url: url))
         try validate(response)
         return String(decoding: data, as: UTF8.self)
+    }
+
+    func latestTextContent(serverAddress: String) async throws -> String {
+        try await listEntries(serverAddress: serverAddress)
+            .reversed()
+            .first { !$0.isImage && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }?
+            .content ?? ""
     }
 
     func post(_ text: String, serverAddress: String) async throws {
@@ -1656,6 +1688,10 @@ private struct ComposerView: View {
 private struct CategoryFilterView: View {
     @Binding var selectedCategory: EntryCategoryFilter
     let countProvider: (EntryCategoryFilter) -> Int
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1663,34 +1699,39 @@ private struct CategoryFilterView: View {
                 .font(.headline)
                 .foregroundStyle(Color.textSyncBrown)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(EntryCategoryFilter.allCases) { category in
-                        Button {
-                            selectedCategory = category
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: category.systemImage)
-                                Text(category.title)
-                                Text("\(countProvider(category))")
-                                    .font(.caption2.weight(.bold))
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 3)
-                                    .background(Capsule().fill(Color.white.opacity(selectedCategory == category ? 0.24 : 0.46)))
-                            }
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(selectedCategory == category ? .white : Color.textSyncBrown)
-                            .padding(.horizontal, 12)
-                            .frame(height: 36)
-                            .background(
-                                Capsule().fill(selectedCategory == category ? Color.textSyncTeal : Color.textSyncPaper)
-                            )
-                            .overlay(
-                                Capsule().stroke(Color.textSyncLine, lineWidth: selectedCategory == category ? 0 : 1)
-                            )
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(EntryCategoryFilter.allCases) { category in
+                    Button {
+                        selectedCategory = category
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: category.systemImage)
+                                .frame(width: 18)
+
+                            Text(category.title)
+                                .lineLimit(1)
+
+                            Spacer(minLength: 4)
+
+                            Text("\(countProvider(category))")
+                                .font(.caption2.weight(.bold))
+                                .lineLimit(1)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.white.opacity(selectedCategory == category ? 0.24 : 0.46)))
                         }
-                        .buttonStyle(.plain)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(selectedCategory == category ? .white : Color.textSyncBrown)
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12).fill(selectedCategory == category ? Color.textSyncTeal : Color.textSyncPaper)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12).stroke(Color.textSyncLine, lineWidth: selectedCategory == category ? 0 : 1)
+                        )
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -1715,6 +1756,7 @@ private struct HistorySection: View {
     let deleteAction: (SyncEntry) -> Void
     let restoreHiddenAction: (HiddenEntryRange) -> Void
     let loadMoreAction: () -> Void
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         Section {
@@ -1793,13 +1835,27 @@ private struct HistorySection: View {
         HistoryRow(entry: entry, isLatest: entry.id == latestID, serverAddress: serverAddress)
             .contentShape(Rectangle())
             .onTapGesture {
-                copyAction(entry)
+                if entry.normalizedCategory == EntryCategoryFilter.link.rawValue, let url = entry.primaryURL {
+                    openURL(url)
+                } else {
+                    copyAction(entry)
+                }
             }
             .contextMenu {
+                let urls = Array(entry.detectedURLs.prefix(5))
+
                 Button {
                     copyAction(entry)
                 } label: {
                     Label("复制", systemImage: "doc.on.doc.fill")
+                }
+
+                ForEach(urls, id: \.absoluteString) { url in
+                    Button {
+                        openURL(url)
+                    } label: {
+                        Label(linkMenuTitle(for: url), systemImage: "safari")
+                    }
                 }
 
                 if !entry.isImage {
@@ -1865,6 +1921,11 @@ private struct HistorySection: View {
             .tint(Color.textSyncTeal)
         }
         .textSyncListRow()
+    }
+
+    private func linkMenuTitle(for url: URL) -> String {
+        let title = url.host ?? url.absoluteString
+        return "打开 \(title)"
     }
 }
 

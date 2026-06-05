@@ -74,7 +74,7 @@ struct FetchRemoteTextIntent: AppIntent {
         }
 
         let service = TextSyncService()
-        let latestContent = try await service.latestContent(serverAddress: serverAddress)
+        let latestContent = try await service.latestTextContent(serverAddress: serverAddress)
         guard !latestContent.isEmpty else {
             return .result(dialog: "服务器暂无文本")
         }
