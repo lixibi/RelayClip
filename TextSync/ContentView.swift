@@ -558,6 +558,75 @@ final class TextSyncService {
     }
 }
 
+enum ImageDiskCache {
+    static func cachedImage(for entry: SyncEntry, serverAddress: String, variant: String) -> UIImage? {
+        guard let url = imageURL(for: entry, serverAddress: serverAddress, variant: variant),
+              let data = try? Data(contentsOf: fileURL(for: url, variant: variant)) else {
+            return nil
+        }
+        return UIImage(data: data)
+    }
+
+    static func cachedData(for entry: SyncEntry, serverAddress: String, variant: String) -> Data? {
+        guard let url = imageURL(for: entry, serverAddress: serverAddress, variant: variant) else {
+            return nil
+        }
+        return try? Data(contentsOf: fileURL(for: url, variant: variant))
+    }
+
+    static func store(_ data: Data, for entry: SyncEntry, serverAddress: String, variant: String) throws {
+        guard let url = imageURL(for: entry, serverAddress: serverAddress, variant: variant) else {
+            return
+        }
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        try data.write(to: fileURL(for: url, variant: variant), options: .atomic)
+    }
+
+    static func prune(maximumBytes: Int = 80 * 1024 * 1024) {
+        let fileManager = FileManager.default
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: cacheDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
+        ) else {
+            return
+        }
+
+        let records = files.compactMap { url -> (url: URL, date: Date, size: Int)? in
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            return (url, values?.contentModificationDate ?? .distantPast, values?.fileSize ?? 0)
+        }
+        var total = records.reduce(0) { $0 + $1.size }
+        for record in records.sorted(by: { $0.date < $1.date }) where total > maximumBytes {
+            try? fileManager.removeItem(at: record.url)
+            total -= record.size
+        }
+    }
+
+    static func clear() {
+        try? FileManager.default.removeItem(at: cacheDirectory)
+    }
+
+    private static func imageURL(for entry: SyncEntry, serverAddress: String, variant: String) -> URL? {
+        variant == "asset"
+            ? entry.resolvedAssetURL(serverAddress: serverAddress)
+            : entry.resolvedThumbnailURL(serverAddress: serverAddress)
+    }
+
+    private static var cacheDirectory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("TextSyncImageCache", isDirectory: true)
+    }
+
+    private static func fileURL(for remoteURL: URL, variant: String) -> URL {
+        let key = "\(variant)-\(remoteURL.absoluteString)"
+        let fileName = Data(key.utf8).base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "=", with: "")
+        return cacheDirectory.appendingPathComponent(fileName)
+    }
+}
+
 @MainActor
 final class TextSyncLocalStore {
     static let defaultAppTitle = "文本中转"
@@ -1073,6 +1142,7 @@ final class TextSyncViewModel: ObservableObject {
             trashEntries = try localStore.trashEntries(serverAddress: serverAddress)
             syncLatestDraft()
             normalizeVisibleCount()
+            warmImageCache(for: entries)
             message = entries.isEmpty ? "服务器暂无内容" : "已同步最新内容"
         } catch {
             loadCachedEntries()
@@ -1355,6 +1425,7 @@ final class TextSyncViewModel: ObservableObject {
     func resetLocalData() {
         do {
             try localStore.resetCachedEntries(serverAddress: serverAddress)
+            ImageDiskCache.clear()
             entries = []
             hiddenEntries = []
             trashEntries = []
@@ -1416,6 +1487,13 @@ final class TextSyncViewModel: ObservableObject {
     }
 
     private func copyImage(_ entry: SyncEntry) async {
+        if let data = ImageDiskCache.cachedData(for: entry, serverAddress: serverAddress, variant: "asset"),
+           let image = UIImage(data: data) {
+            UIPasteboard.general.image = image
+            message = "已复制图片"
+            return
+        }
+
         guard let url = entry.resolvedAssetURL(serverAddress: serverAddress) else {
             message = "图片地址无效"
             return
@@ -1427,10 +1505,37 @@ final class TextSyncViewModel: ObservableObject {
                 message = "图片读取失败"
                 return
             }
+            try? ImageDiskCache.store(data, for: entry, serverAddress: serverAddress, variant: "asset")
+            ImageDiskCache.prune()
             UIPasteboard.general.image = image
             message = "已复制图片"
         } catch {
             message = "复制图片失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func warmImageCache(for entries: [SyncEntry]) {
+        let serverAddress = self.serverAddress
+        let imageEntries = entries.reversed().filter(\.isImage).prefix(20)
+        Task.detached(priority: .utility) {
+            for entry in imageEntries {
+                if ImageDiskCache.cachedData(for: entry, serverAddress: serverAddress, variant: "thumb") != nil {
+                    continue
+                }
+                guard let url = entry.resolvedThumbnailURL(serverAddress: serverAddress) else { continue }
+                do {
+                    let (data, response) = try await URLSession.shared.data(from: url)
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          (200..<300).contains(httpResponse.statusCode),
+                          UIImage(data: data) != nil else {
+                        continue
+                    }
+                    try? ImageDiskCache.store(data, for: entry, serverAddress: serverAddress, variant: "thumb")
+                } catch {
+                    continue
+                }
+            }
+            ImageDiskCache.prune()
         }
     }
 
@@ -2329,32 +2434,30 @@ private struct ImageDetailView: View {
     let serverAddress: String
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @State private var image: UIImage?
+    @State private var isLoadingRemote = false
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                if let url = entry.resolvedAssetURL(serverAddress: serverAddress) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
+                if let image {
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: UIScreen.main.bounds.width, minHeight: 260)
+                            .padding()
+                    }
+                } else if entry.resolvedAssetURL(serverAddress: serverAddress) != nil {
+                    VStack(spacing: 10) {
+                        if isLoadingRemote {
                             ProgressView()
                                 .tint(.white)
-                        case .success(let image):
-                            ScrollView([.horizontal, .vertical]) {
-                                image
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(maxWidth: UIScreen.main.bounds.width, minHeight: 260)
-                                    .padding()
-                            }
-                        case .failure:
-                            Label("原图加载失败", systemImage: "photo")
-                                .foregroundStyle(.white)
-                        @unknown default:
-                            EmptyView()
                         }
+                        Label(isLoadingRemote ? "正在加载原图" : "原图未缓存", systemImage: "photo")
+                            .foregroundStyle(.white)
                     }
                 } else {
                     Label("原图地址无效", systemImage: "photo")
@@ -2380,6 +2483,38 @@ private struct ImageDetailView: View {
                     }
                 }
             }
+        }
+        .task(id: detailTaskID) {
+            await loadImage()
+        }
+    }
+
+    private var detailTaskID: String {
+        "\(entry.id)-\(entry.assetURL ?? "")-\(serverAddress)"
+    }
+
+    @MainActor
+    private func loadImage() async {
+        if let cached = ImageDiskCache.cachedImage(for: entry, serverAddress: serverAddress, variant: "asset")
+            ?? ImageDiskCache.cachedImage(for: entry, serverAddress: serverAddress, variant: "thumb") {
+            image = cached
+        }
+
+        guard let url = entry.resolvedAssetURL(serverAddress: serverAddress) else { return }
+        isLoadingRemote = true
+        defer { isLoadingRemote = false }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode),
+                  let remoteImage = UIImage(data: data) else {
+                return
+            }
+            try? ImageDiskCache.store(data, for: entry, serverAddress: serverAddress, variant: "asset")
+            ImageDiskCache.prune()
+            image = remoteImage
+        } catch {
         }
     }
 }
@@ -2500,28 +2635,26 @@ private struct ImagePreview: View {
     let entry: SyncEntry
     let serverAddress: String
     let minHeight: CGFloat
+    @State private var cachedImage: UIImage?
+    @State private var isLoadingRemote = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack {
                 Color.textSyncPaper
 
-                if let url = entry.resolvedThumbnailURL(serverAddress: serverAddress) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
+                if let cachedImage {
+                    Image(uiImage: cachedImage)
+                        .resizable()
+                        .scaledToFit()
+                } else if entry.resolvedThumbnailURL(serverAddress: serverAddress) != nil {
+                    VStack(spacing: 8) {
+                        if isLoadingRemote {
                             ProgressView()
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        case .failure:
-                            Label("图片加载失败", systemImage: "photo")
-                                .font(.callout.weight(.semibold))
-                                .foregroundStyle(Color.textSyncMuted)
-                        @unknown default:
-                            EmptyView()
                         }
+                        Label(isLoadingRemote ? "正在加载图片" : "图片未缓存", systemImage: "photo")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(Color.textSyncMuted)
                     }
                 } else {
                     Label("图片地址无效", systemImage: "photo")
@@ -2542,6 +2675,39 @@ private struct ImagePreview: View {
                     .foregroundStyle(Color.textSyncMuted)
                     .lineLimit(1)
             }
+        }
+        .task(id: cacheTaskID) {
+            await loadImage()
+        }
+    }
+
+    private var cacheTaskID: String {
+        "\(entry.id)-\(entry.thumbnailURL ?? entry.assetURL ?? "")-\(serverAddress)"
+    }
+
+    @MainActor
+    private func loadImage() async {
+        if let image = ImageDiskCache.cachedImage(for: entry, serverAddress: serverAddress, variant: "thumb") {
+            cachedImage = image
+            return
+        }
+
+        guard let url = entry.resolvedThumbnailURL(serverAddress: serverAddress) else { return }
+        isLoadingRemote = true
+        defer { isLoadingRemote = false }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode),
+                  let image = UIImage(data: data) else {
+                return
+            }
+            try? ImageDiskCache.store(data, for: entry, serverAddress: serverAddress, variant: "thumb")
+            ImageDiskCache.prune()
+            cachedImage = image
+        } catch {
+            cachedImage = nil
         }
     }
 }
