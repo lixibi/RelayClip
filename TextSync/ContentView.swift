@@ -2735,11 +2735,28 @@ private struct SettingsView: View {
 
 private struct HelpView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @State private var updateStatus = "尚未检查更新"
+    @State private var isCheckingUpdate = false
+    @State private var latestReleaseURL = URL(string: "https://github.com/lixibi/iosTextSync/releases/tag/latest-ipa")!
+    @State private var latestAssetURL: URL?
+
+    private let projectURL = URL(string: "https://github.com/lixibi/iosTextSync")!
+    private let latestReleaseAPIURL = URL(string: "https://api.github.com/repos/lixibi/iosTextSync/releases/tags/latest-ipa")!
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    UpdateHelpCard(
+                        currentVersion: currentVersionText,
+                        status: updateStatus,
+                        isChecking: isCheckingUpdate,
+                        checkAction: { Task { await checkForUpdates() } },
+                        openProjectAction: { openURL(projectURL) },
+                        openLatestAction: { openURL(latestAssetURL ?? latestReleaseURL) }
+                    )
+
                     HelpCard(
                         title: "文本中转是什么",
                         systemImage: "bolt.horizontal.circle.fill",
@@ -2805,6 +2822,163 @@ private struct HelpView: View {
                 }
             }
         }
+    }
+
+    private var currentVersionText: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "未知"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "未知"
+        return "\(version) (\(build))"
+    }
+
+    @MainActor
+    private func checkForUpdates() async {
+        isCheckingUpdate = true
+        updateStatus = "正在检查 GitHub 最新版本..."
+        defer { isCheckingUpdate = false }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: latestReleaseAPIURL)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                updateStatus = "检查失败：GitHub 返回异常"
+                return
+            }
+
+            let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+            latestReleaseURL = release.htmlURL
+            latestAssetURL = release.assets.first { $0.name.lowercased().hasSuffix(".ipa") }?.browserDownloadURL
+
+            let latest = release.parsedVersion
+            if isNewerRelease(latestVersion: latest.version, latestBuild: latest.build) {
+                let versionText = latest.version.map { version in
+                    latest.build.map { "\(version) (\($0))" } ?? version
+                } ?? release.tagName
+                updateStatus = "发现新版本：\(versionText)"
+            } else {
+                updateStatus = "当前已是最新版本"
+            }
+        } catch {
+            updateStatus = "检查失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func isNewerRelease(latestVersion: String?, latestBuild: String?) -> Bool {
+        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let currentBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+
+        if let latestVersion {
+            let versionComparison = compareVersion(latestVersion, currentVersion)
+            if versionComparison > 0 { return true }
+            if versionComparison < 0 { return false }
+        }
+
+        guard let latestBuild = latestBuild.flatMap(Int.init),
+              let currentBuild = Int(currentBuild) else {
+            return false
+        }
+        return latestBuild > currentBuild
+    }
+
+    private func compareVersion(_ lhs: String, _ rhs: String) -> Int {
+        let left = lhs.split(separator: ".").compactMap { Int($0) }
+        let right = rhs.split(separator: ".").compactMap { Int($0) }
+        for index in 0..<max(left.count, right.count) {
+            let l = index < left.count ? left[index] : 0
+            let r = index < right.count ? right[index] : 0
+            if l != r { return l > r ? 1 : -1 }
+        }
+        return 0
+    }
+}
+
+private struct GitHubRelease: Decodable {
+    struct Asset: Decodable {
+        let name: String
+        let browserDownloadURL: URL
+
+        private enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadURL = "browser_download_url"
+        }
+    }
+
+    let tagName: String
+    let htmlURL: URL
+    let body: String?
+    let assets: [Asset]
+
+    var parsedVersion: (version: String?, build: String?) {
+        guard let body,
+              let regex = try? NSRegularExpression(pattern: #"版本：\s*([^\s(]+)\s*\(([^)]+)\)"#) else {
+            return (nil, nil)
+        }
+        let range = NSRange(body.startIndex..<body.endIndex, in: body)
+        guard let match = regex.firstMatch(in: body, options: [], range: range),
+              let versionRange = Range(match.range(at: 1), in: body),
+              let buildRange = Range(match.range(at: 2), in: body) else {
+            return (nil, nil)
+        }
+        return (String(body[versionRange]), String(body[buildRange]))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case htmlURL = "html_url"
+        case body
+        case assets
+    }
+}
+
+private struct UpdateHelpCard: View {
+    let currentVersion: String
+    let status: String
+    let isChecking: Bool
+    let checkAction: () -> Void
+    let openProjectAction: () -> Void
+    let openLatestAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("项目与更新", systemImage: "arrow.down.circle.fill")
+                .font(.headline)
+                .foregroundStyle(Color.textSyncBrown)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("当前版本：\(currentVersion)")
+                Text(status)
+            }
+            .font(.footnote)
+            .foregroundStyle(Color.textSyncMuted)
+
+            HStack(spacing: 10) {
+                Button(action: checkAction) {
+                    Label(isChecking ? "检查中" : "检查更新", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+                .disabled(isChecking)
+
+                Button(action: openLatestAction) {
+                    Label("最新版", systemImage: "square.and.arrow.down.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncGreen))
+            }
+
+            Button(action: openProjectAction) {
+                Label("打开 GitHub 项目", systemImage: "link")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncBrown))
+
+            Text("iOS 不允许普通 App 静默自我安装；这里会打开 GitHub 最新 Release 或 IPA 下载入口，由你按当前安装方式完成更新。")
+                .font(.caption)
+                .foregroundStyle(Color.textSyncMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
     }
 }
 
