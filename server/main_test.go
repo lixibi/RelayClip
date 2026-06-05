@@ -237,6 +237,72 @@ func TestHomePageIncludesImageRenderingSupport(t *testing.T) {
 	}
 }
 
+func TestTextEntriesCanBeFilteredByExtractedCategory(t *testing.T) {
+	resetTestState(t)
+
+	cases := []struct {
+		content  string
+		category string
+	}{
+		{"https://example.com/path", "link"},
+		{"seraphina_mo@163.com", "email"},
+		{"18878380961", "phone"},
+		{"普通文本 https://example.com", "text"},
+	}
+
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/api/post", strings.NewReader(tc.content))
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("post %q status = %d, want %d: %s", tc.content, rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+
+	for _, category := range []string{"link", "email", "phone"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/items?category="+category, nil)
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list %s status = %d, want %d", category, rec.Code, http.StatusOK)
+		}
+
+		var items []map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+			t.Fatalf("decode %s list: %v", category, err)
+		}
+		if len(items) != 1 || items[0]["category"] != category {
+			t.Fatalf("%s list mismatch: %#v", category, items)
+		}
+	}
+}
+
+func TestHealthEndpointReportsCounts(t *testing.T) {
+	resetTestState(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/post", strings.NewReader("seraphina_mo@163.com"))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("post status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec = httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var health map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if health["ok"] != true || int(health["active"].(float64)) != 1 {
+		t.Fatalf("health mismatch: %#v", health)
+	}
+}
+
 func TestDeleteMovesEntryToTrashAndRestore(t *testing.T) {
 	resetTestState(t)
 

@@ -3,6 +3,146 @@ import Foundation
 import SwiftUI
 import UIKit
 
+struct DetectedContentAction: Identifiable, Equatable {
+    enum Kind: String {
+        case link
+        case email
+        case phone
+    }
+
+    let kind: Kind
+    let value: String
+    let url: URL
+
+    var id: String {
+        "\(kind.rawValue)-\(url.absoluteString)"
+    }
+
+    var systemImage: String {
+        switch kind {
+        case .link: return "safari"
+        case .email: return "envelope.fill"
+        case .phone: return "phone.fill"
+        }
+    }
+
+    var category: String {
+        kind.rawValue
+    }
+
+    var menuTitle: String {
+        switch kind {
+        case .link:
+            return "打开 \(url.host ?? value)"
+        case .email:
+            return "发邮件给 \(value)"
+        case .phone:
+            return "拨打 \(value)"
+        }
+    }
+
+    static func detect(in text: String) -> [DetectedContentAction] {
+        guard !text.isEmpty else { return [] }
+
+        var actions: [DetectedContentAction] = []
+        var seen = Set<String>()
+        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue | NSTextCheckingResult.CheckingType.phoneNumber.rawValue) {
+            for match in detector.matches(in: text, options: [], range: fullRange) {
+                if let phoneNumber = match.phoneNumber,
+                   let url = phoneURL(for: phoneNumber) {
+                    append(kind: .phone, value: phoneNumber, url: url, to: &actions, seen: &seen)
+                    continue
+                }
+
+                guard let url = match.url else { continue }
+                if url.scheme?.lowercased() == "mailto" {
+                    let rawEmail = String(url.absoluteString.dropFirst("mailto:".count))
+                    let email = rawEmail.removingPercentEncoding ?? rawEmail
+                    append(kind: .email, value: email, url: url, to: &actions, seen: &seen)
+                } else {
+                    append(kind: .link, value: url.absoluteString, url: url, to: &actions, seen: &seen)
+                }
+            }
+        }
+
+        for email in emails(in: text) {
+            guard let url = URL(string: "mailto:\(email)") else { continue }
+            append(kind: .email, value: email, url: url, to: &actions, seen: &seen)
+        }
+
+        return actions
+    }
+
+    static func primaryCategory(kind: String, content: String) -> String {
+        if kind.lowercased() == "image" {
+            return "image"
+        }
+
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "text" }
+
+        if isWholeHTTPURL(trimmed) {
+            return "link"
+        }
+        if isWholeEmail(trimmed) {
+            return "email"
+        }
+        if isWholePhone(trimmed) {
+            return "phone"
+        }
+        return "text"
+    }
+
+    private static func append(kind: Kind, value: String, url: URL, to actions: inout [DetectedContentAction], seen: inout Set<String>) {
+        let key = "\(kind.rawValue)-\(value.lowercased())"
+        guard !seen.contains(key) else { return }
+        seen.insert(key)
+        actions.append(DetectedContentAction(kind: kind, value: value, url: url))
+    }
+
+    private static func emails(in text: String) -> [String] {
+        let pattern = #"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, options: [], range: range).compactMap { match in
+            guard let range = Range(match.range, in: text) else { return nil }
+            return String(text[range])
+        }
+    }
+
+    private static func phoneURL(for phoneNumber: String) -> URL? {
+        let allowed = Set("+0123456789")
+        let normalized = phoneNumber.filter { allowed.contains($0) }
+        guard normalized.count >= 5 else { return nil }
+        return URL(string: "tel:\(normalized)")
+    }
+
+    private static func isWholeHTTPURL(_ text: String) -> Bool {
+        guard let url = URL(string: text),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil else {
+            return false
+        }
+        return url.absoluteString == text || url.absoluteString == text + "/"
+    }
+
+    private static func isWholeEmail(_ text: String) -> Bool {
+        emails(in: text).contains { $0.caseInsensitiveCompare(text) == .orderedSame }
+    }
+
+    private static func isWholePhone(_ text: String) -> Bool {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue) else {
+            return false
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = detector.matches(in: text, options: [], range: range)
+        return matches.count == 1 && matches[0].range.location == 0 && matches[0].range.length == range.length
+    }
+}
+
 struct SyncEntry: Identifiable, Decodable, Equatable {
     let id: Int
     let time: Date
@@ -105,12 +245,28 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
         category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    var detectedURLs: [URL] {
-        SyncEntry.urls(in: content)
+    var effectiveCategory: String {
+        DetectedContentAction.primaryCategory(kind: kind, content: content)
     }
 
-    var primaryURL: URL? {
-        detectedURLs.first
+    var displayCategory: String {
+        let normalized = normalizedCategory
+        if normalized.isEmpty || normalized == "text" {
+            return effectiveCategory
+        }
+        return normalized
+    }
+
+    var detectedActions: [DetectedContentAction] {
+        DetectedContentAction.detect(in: content)
+    }
+
+    var detectedURLs: [URL] {
+        detectedActions.filter { $0.kind == .link }.map(\.url)
+    }
+
+    var primaryAction: DetectedContentAction? {
+        detectedActions.first { $0.category == displayCategory } ?? detectedActions.first
     }
 
     var imageDetailText: String {
@@ -143,31 +299,7 @@ struct SyncEntry: Identifiable, Decodable, Equatable {
     }
 
     private static func defaultCategory(kind: String, content: String) -> String {
-        if kind.lowercased() == "image" {
-            return "image"
-        }
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
-            return "link"
-        }
-        return "text"
-    }
-
-    private static func urls(in text: String) -> [URL] {
-        guard !text.isEmpty,
-              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
-            return []
-        }
-
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        var seen = Set<String>()
-        return detector.matches(in: text, options: [], range: range).compactMap { match in
-            guard let url = match.url else { return nil }
-            let key = url.absoluteString
-            guard !seen.contains(key) else { return nil }
-            seen.insert(key)
-            return url
-        }
+        DetectedContentAction.primaryCategory(kind: kind, content: content)
     }
 }
 
@@ -176,6 +308,8 @@ enum EntryCategoryFilter: String, CaseIterable, Identifiable {
     case text
     case image
     case link
+    case email
+    case phone
 
     var id: String { rawValue }
 
@@ -185,6 +319,8 @@ enum EntryCategoryFilter: String, CaseIterable, Identifiable {
         case .text: return "文本"
         case .image: return "图片"
         case .link: return "链接"
+        case .email: return "邮箱"
+        case .phone: return "电话"
         }
     }
 
@@ -194,6 +330,8 @@ enum EntryCategoryFilter: String, CaseIterable, Identifiable {
         case .text: return "text.alignleft"
         case .image: return "photo"
         case .link: return "link"
+        case .email: return "envelope"
+        case .phone: return "phone"
         }
     }
 }
@@ -871,7 +1009,7 @@ final class TextSyncViewModel: ObservableObject {
 
     var filteredEntries: [SyncEntry] {
         guard selectedCategory != .all else { return entries }
-        return entries.filter { $0.normalizedCategory == selectedCategory.rawValue }
+        return entries.filter { $0.displayCategory == selectedCategory.rawValue }
     }
 
     var history: [SyncEntry] {
@@ -900,7 +1038,7 @@ final class TextSyncViewModel: ObservableObject {
 
     func count(for category: EntryCategoryFilter) -> Int {
         guard category != .all else { return entries.count }
-        return entries.filter { $0.normalizedCategory == category.rawValue }.count
+        return entries.filter { $0.displayCategory == category.rawValue }.count
     }
 
     func loadCachedEntries() {
@@ -1363,7 +1501,9 @@ struct ContentView: View {
     @State private var isSettingsPresented = false
     @State private var isHelpPresented = false
     @State private var isTrashPresented = false
+    @State private var isQuickPanelPresented = false
     @State private var editingEntry: SyncEntry?
+    @State private var imagePreviewEntry: SyncEntry?
     @State private var editingText = ""
 
     var body: some View {
@@ -1383,7 +1523,8 @@ struct ContentView: View {
                         ),
                         serverAddress: viewModel.serverAddress,
                         isLoading: viewModel.isLoading,
-                        copyAction: { Task { await viewModel.copyLatest() } }
+                        copyAction: { Task { await viewModel.copyLatest() } },
+                        openImageAction: { entry in imagePreviewEntry = entry }
                     )
                     .textSyncListRow()
 
@@ -1424,6 +1565,7 @@ struct ContentView: View {
                         deleteAction: { entry in
                             Task { await viewModel.deleteRemote(entry) }
                         },
+                        openImageAction: { entry in imagePreviewEntry = entry },
                         restoreHiddenAction: { viewModel.restoreHidden($0) },
                         loadMoreAction: { viewModel.loadMoreHistory() }
                     )
@@ -1438,6 +1580,13 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button {
+                        isQuickPanelPresented = true
+                    } label: {
+                        Image(systemName: "rectangle.bottomthird.inset.filled")
+                    }
+                    .accessibilityLabel("半屏快捷面板")
+
                     Button {
                         isSettingsPresented = true
                     } label: {
@@ -1463,6 +1612,10 @@ struct ContentView: View {
             .task {
                 viewModel.loadCachedEntries()
                 await viewModel.refresh(allowOverwriteLocalEdits: false)
+                presentQuickPanelIfRequested()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                presentQuickPanelIfRequested()
             }
             .sheet(isPresented: $isSettingsPresented) {
                 SettingsView(
@@ -1502,6 +1655,20 @@ struct ContentView: View {
                 )
                 .presentationDetents([.medium, .large])
             }
+            .sheet(isPresented: $isQuickPanelPresented) {
+                QuickPanelView(
+                    title: viewModel.appTitle,
+                    entries: Array(viewModel.entries.reversed().prefix(8)),
+                    serverAddress: viewModel.serverAddress,
+                    copyAction: { entry in Task { await viewModel.copy(entry) } },
+                    openImageAction: { entry in
+                        isQuickPanelPresented = false
+                        imagePreviewEntry = entry
+                    }
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
             .sheet(item: $editingEntry) { entry in
                 EditHistoryEntryView(
                     entry: entry,
@@ -1511,6 +1678,10 @@ struct ContentView: View {
                     editingEntry = nil
                 }
                 .presentationDetents([.medium, .large])
+            }
+            .sheet(item: $imagePreviewEntry) { entry in
+                ImageDetailView(entry: entry, serverAddress: viewModel.serverAddress)
+                    .presentationDetents([.large])
             }
             .overlay(alignment: .bottom) {
                 if let message = viewModel.message {
@@ -1526,6 +1697,12 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private func presentQuickPanelIfRequested() {
+        guard UserDefaults.standard.bool(forKey: OpenQuickPanelIntent.requestKey) else { return }
+        UserDefaults.standard.set(false, forKey: OpenQuickPanelIntent.requestKey)
+        isQuickPanelPresented = true
     }
 }
 
@@ -1551,6 +1728,7 @@ private struct LatestTextView: View {
     let serverAddress: String
     let isLoading: Bool
     let copyAction: () -> Void
+    let openImageAction: (SyncEntry) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1578,6 +1756,10 @@ private struct LatestTextView: View {
 
             if let entry, entry.isImage {
                 ImagePreview(entry: entry, serverAddress: serverAddress, minHeight: 180)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        openImageAction(entry)
+                    }
             } else {
                 TextEditor(text: editableText)
                     .scrollContentBackground(.hidden)
@@ -1689,9 +1871,14 @@ private struct CategoryFilterView: View {
     @Binding var selectedCategory: EntryCategoryFilter
     let countProvider: (EntryCategoryFilter) -> Int
     private let columns = [
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10)
+        GridItem(.adaptive(minimum: 94), spacing: 8)
     ]
+
+    private var visibleCategories: [EntryCategoryFilter] {
+        EntryCategoryFilter.allCases.filter { category in
+            category == .all || countProvider(category) > 0 || selectedCategory == category
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1699,14 +1886,14 @@ private struct CategoryFilterView: View {
                 .font(.headline)
                 .foregroundStyle(Color.textSyncBrown)
 
-            LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(EntryCategoryFilter.allCases) { category in
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(visibleCategories) { category in
                     Button {
                         selectedCategory = category
                     } label: {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Image(systemName: category.systemImage)
-                                .frame(width: 18)
+                                .frame(width: 16)
 
                             Text(category.title)
                                 .lineLimit(1)
@@ -1722,13 +1909,13 @@ private struct CategoryFilterView: View {
                         }
                         .font(.caption.weight(.bold))
                         .foregroundStyle(selectedCategory == category ? .white : Color.textSyncBrown)
-                        .padding(.horizontal, 12)
-                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: .infinity, minHeight: 36)
                         .background(
-                            RoundedRectangle(cornerRadius: 12).fill(selectedCategory == category ? Color.textSyncTeal : Color.textSyncPaper)
+                            Capsule().fill(selectedCategory == category ? Color.textSyncTeal : Color.textSyncPaper)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 12).stroke(Color.textSyncLine, lineWidth: selectedCategory == category ? 0 : 1)
+                            Capsule().stroke(Color.textSyncLine, lineWidth: selectedCategory == category ? 0 : 1)
                         )
                     }
                     .buttonStyle(.plain)
@@ -1754,6 +1941,7 @@ private struct HistorySection: View {
     let pinAction: (SyncEntry) -> Void
     let hideAction: (SyncEntry) -> Void
     let deleteAction: (SyncEntry) -> Void
+    let openImageAction: (SyncEntry) -> Void
     let restoreHiddenAction: (HiddenEntryRange) -> Void
     let loadMoreAction: () -> Void
     @Environment(\.openURL) private var openURL
@@ -1835,14 +2023,16 @@ private struct HistorySection: View {
         HistoryRow(entry: entry, isLatest: entry.id == latestID, serverAddress: serverAddress)
             .contentShape(Rectangle())
             .onTapGesture {
-                if entry.normalizedCategory == EntryCategoryFilter.link.rawValue, let url = entry.primaryURL {
-                    openURL(url)
+                if entry.isImage {
+                    openImageAction(entry)
+                } else if entry.displayCategory != EntryCategoryFilter.text.rawValue, let action = entry.primaryAction {
+                    openURL(action.url)
                 } else {
                     copyAction(entry)
                 }
             }
             .contextMenu {
-                let urls = Array(entry.detectedURLs.prefix(5))
+                let actions = Array(entry.detectedActions.prefix(6))
 
                 Button {
                     copyAction(entry)
@@ -1850,11 +2040,19 @@ private struct HistorySection: View {
                     Label("复制", systemImage: "doc.on.doc.fill")
                 }
 
-                ForEach(urls, id: \.absoluteString) { url in
+                if entry.isImage {
                     Button {
-                        openURL(url)
+                        openImageAction(entry)
                     } label: {
-                        Label(linkMenuTitle(for: url), systemImage: "safari")
+                        Label("查看原图", systemImage: "photo.fill")
+                    }
+                }
+
+                ForEach(actions) { action in
+                    Button {
+                        openURL(action.url)
+                    } label: {
+                        Label(action.menuTitle, systemImage: action.systemImage)
                     }
                 }
 
@@ -1921,11 +2119,6 @@ private struct HistorySection: View {
             .tint(Color.textSyncTeal)
         }
         .textSyncListRow()
-    }
-
-    private func linkMenuTitle(for url: URL) -> String {
-        let title = url.host ?? url.absoluteString
-        return "打开 \(title)"
     }
 }
 
@@ -2010,6 +2203,181 @@ private struct TrashView: View {
                 }
             } message: {
                 Text("这会从远端回收站彻底删除所有内容，操作不可撤销。")
+            }
+        }
+    }
+}
+
+private struct QuickPanelView: View {
+    let title: String
+    let entries: [SyncEntry]
+    let serverAddress: String
+    let copyAction: (SyncEntry) -> Void
+    let openImageAction: (SyncEntry) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppBackground()
+
+                if entries.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "tray")
+                            .font(.system(size: 36, weight: .semibold))
+                        Text("暂无同步内容")
+                            .font(.headline)
+                    }
+                    .foregroundStyle(Color.textSyncMuted)
+                } else {
+                    List(entries) { entry in
+                        QuickPanelRow(entry: entry, serverAddress: serverAddress)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if entry.isImage {
+                                    openImageAction(entry)
+                                } else if entry.displayCategory != EntryCategoryFilter.text.rawValue, let action = entry.primaryAction {
+                                    openURL(action.url)
+                                } else {
+                                    copyAction(entry)
+                                }
+                            }
+                            .contextMenu {
+                                Button {
+                                    copyAction(entry)
+                                } label: {
+                                    Label("复制", systemImage: "doc.on.doc.fill")
+                                }
+
+                                if entry.isImage {
+                                    Button {
+                                        openImageAction(entry)
+                                    } label: {
+                                        Label("查看原图", systemImage: "photo.fill")
+                                    }
+                                }
+
+                                ForEach(Array(entry.detectedActions.prefix(6))) { action in
+                                    Button {
+                                        openURL(action.url)
+                                    } label: {
+                                        Label(action.menuTitle, systemImage: action.systemImage)
+                                    }
+                                }
+                            }
+                            .textSyncListRow()
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct QuickPanelRow: View {
+    let entry: SyncEntry
+    let serverAddress: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            CategoryIcon(entry: entry)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(rowTitle)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.textSyncBrown)
+                    .lineLimit(2)
+
+                Text(entry.time.textSyncFormatted)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color.textSyncMuted)
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.textSyncPaper)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.textSyncLine, lineWidth: 1)
+        )
+    }
+
+    private var rowTitle: String {
+        if entry.isImage {
+            return entry.imageDetailText.isEmpty ? "图片" : entry.imageDetailText
+        }
+        return entry.content
+    }
+}
+
+private struct ImageDetailView: View {
+    let entry: SyncEntry
+    let serverAddress: String
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                if let url = entry.resolvedAssetURL(serverAddress: serverAddress) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .empty:
+                            ProgressView()
+                                .tint(.white)
+                        case .success(let image):
+                            ScrollView([.horizontal, .vertical]) {
+                                image
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(maxWidth: UIScreen.main.bounds.width, minHeight: 260)
+                                    .padding()
+                            }
+                        case .failure:
+                            Label("原图加载失败", systemImage: "photo")
+                                .foregroundStyle(.white)
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
+                } else {
+                    Label("原图地址无效", systemImage: "photo")
+                        .foregroundStyle(.white)
+                }
+            }
+            .navigationTitle(entry.imageDetailText.isEmpty ? "原图" : entry.imageDetailText)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .primaryAction) {
+                    if let url = entry.resolvedAssetURL(serverAddress: serverAddress) {
+                        Button {
+                            openURL(url)
+                        } label: {
+                            Image(systemName: "safari")
+                        }
+                    }
+                }
             }
         }
     }
@@ -2111,6 +2479,17 @@ private struct HistoryRow: View {
                 Text(entry.time.textSyncFormatted)
                     .font(.caption)
                     .foregroundStyle(Color.textSyncMuted)
+            }
+
+            HStack(spacing: 6) {
+                CategoryIcon(entry: entry)
+
+                if let action = entry.primaryAction {
+                    Label(action.value, systemImage: action.systemImage)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(Color.textSyncMuted)
+                        .lineLimit(1)
+                }
             }
 
             if entry.isImage {
@@ -2230,6 +2609,20 @@ private struct StatusIcon: View {
             .font(.caption.weight(.bold))
             .foregroundStyle(color)
             .accessibilityLabel(label)
+    }
+}
+
+private struct CategoryIcon: View {
+    let entry: SyncEntry
+
+    var body: some View {
+        let category = EntryCategoryFilter(rawValue: entry.displayCategory) ?? .text
+        Label(category.title, systemImage: category.systemImage)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(Color.textSyncBrown)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.textSyncPanel.opacity(0.78)))
     }
 }
 

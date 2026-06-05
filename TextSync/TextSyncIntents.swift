@@ -93,6 +93,18 @@ struct FetchRemoteTextIntent: AppIntent {
     }
 }
 
+struct OpenQuickPanelIntent: AppIntent {
+    static let requestKey = "TextSyncOpenQuickPanelRequested"
+    static var title: LocalizedStringResource = "打开快捷面板"
+    static var description = IntentDescription("打开 TextSync，并显示半屏快捷面板。")
+    static var openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        UserDefaults.standard.set(true, forKey: Self.requestKey)
+        return .result(dialog: "正在打开 TextSync 快捷面板")
+    }
+}
+
 struct TextSyncShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -113,6 +125,16 @@ struct TextSyncShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "获取远程",
             systemImageName: "doc.on.doc.fill"
+        )
+
+        AppShortcut(
+            intent: OpenQuickPanelIntent(),
+            phrases: [
+                "打开 \(.applicationName) 快捷面板",
+                "\(.applicationName) 半屏面板"
+            ],
+            shortTitle: "快捷面板",
+            systemImageName: "rectangle.bottomthird.inset.filled"
         )
     }
 }

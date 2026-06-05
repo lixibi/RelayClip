@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,6 +55,11 @@ const thumbnailMaxSide = 360
 
 var errNoContentField = errors.New("no content field")
 
+var (
+	emailPattern = regexp.MustCompile(`(?i)^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$`)
+	phonePattern = regexp.MustCompile(`^\+?[0-9][0-9 .\-()]{4,}[0-9]$`)
+)
+
 func configureDataFileFromEnv() {
 	if path := os.Getenv("KEYSERVER_DATA_FILE"); path != "" {
 		dataFile = path
@@ -88,11 +94,25 @@ func categoryForEntry(entry Entry) string {
 		return "image"
 	}
 	content := strings.TrimSpace(entry.Content)
-	lower := strings.ToLower(content)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+	if isWholeHTTPURL(content) {
 		return "link"
 	}
+	if emailPattern.MatchString(content) {
+		return "email"
+	}
+	if phonePattern.MatchString(content) {
+		return "phone"
+	}
 	return "text"
+}
+
+func isWholeHTTPURL(content string) bool {
+	parsed, err := url.Parse(content)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	return (scheme == "http" || scheme == "https") && parsed.Host != "" && parsed.String() == content
 }
 
 func load() {
@@ -247,6 +267,32 @@ func entryMap(e Entry) map[string]interface{} {
 		"height":        e.Height,
 		"byte_count":    e.ByteCount,
 		"deleted_at":    deletedAtString(e.DeletedAt),
+	}
+}
+
+func healthMap() map[string]interface{} {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	activeCount := 0
+	trashCount := 0
+	categoryCounts := map[string]int{}
+	for _, entry := range entries {
+		entry = withAssetURLs(entry)
+		if entry.DeletedAt == nil {
+			activeCount++
+			categoryCounts[entry.Category]++
+		} else {
+			trashCount++
+		}
+	}
+
+	return map[string]interface{}{
+		"ok":         true,
+		"active":     activeCount,
+		"trash":      trashCount,
+		"total":      len(entries),
+		"categories": categoryCounts,
 	}
 }
 
@@ -766,6 +812,11 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 
+	case "/api/health":
+		data, _ := json.Marshal(healthMap())
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+
 	case "/api/items":
 		switch r.Method {
 		case http.MethodGet:
@@ -991,8 +1042,17 @@ func main() {
 	fmt.Println("  GET  /api/get?id=5     -> specific id")
 	fmt.Println("  POST /api/post         -> body as new key")
 	fmt.Println("  GET  /api/list         -> list all with time & id")
+	fmt.Println("  GET  /api/health       -> service health")
 
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	server := &http.Server{
+		Addr:              ":8080",
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	if err := server.ListenAndServe(); err != nil {
 		fmt.Println("Server error:", err)
 	}
 }
