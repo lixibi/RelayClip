@@ -129,6 +129,10 @@ func save() error {
 	mu.Lock()
 	defer mu.Unlock()
 
+	return saveLocked()
+}
+
+func saveLocked() error {
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err
@@ -362,9 +366,10 @@ func nextEntryID() int {
 
 func appendEntry(entry Entry) error {
 	mu.Lock()
+	defer mu.Unlock()
+
 	entries = append(entries, entry)
-	mu.Unlock()
-	return save()
+	return saveLocked()
 }
 
 func postTextEntry(content string) error {
@@ -401,29 +406,29 @@ func postImageEntry(upload *uploadedImage) error {
 func softDeleteEntry(id int) bool {
 	now := time.Now()
 	mu.Lock()
+	defer mu.Unlock()
+
 	for i := range entries {
 		if entries[i].ID == id {
 			if entries[i].DeletedAt == nil {
 				entries[i].DeletedAt = &now
 			}
-			mu.Unlock()
-			return save() == nil
+			return saveLocked() == nil
 		}
 	}
-	mu.Unlock()
 	return false
 }
 
 func restoreEntry(id int) bool {
 	mu.Lock()
+	defer mu.Unlock()
+
 	for i := range entries {
 		if entries[i].ID == id {
 			entries[i].DeletedAt = nil
-			mu.Unlock()
-			return save() == nil
+			return saveLocked() == nil
 		}
 	}
-	mu.Unlock()
 	return false
 }
 
@@ -440,14 +445,15 @@ func permanentlyDeleteEntry(id int) bool {
 			break
 		}
 	}
-	mu.Unlock()
-
 	if !found {
+		mu.Unlock()
 		return false
 	}
-	if err := save(); err != nil {
+	if err := saveLocked(); err != nil {
+		mu.Unlock()
 		return false
 	}
+	mu.Unlock()
 	removeAssetFiles(removed)
 	return true
 }
@@ -466,14 +472,16 @@ func permanentlyDeleteTrash(category string) int {
 		kept = append(kept, entry)
 	}
 	entries = kept
-	mu.Unlock()
 
 	if len(removed) == 0 {
+		mu.Unlock()
 		return 0
 	}
-	if err := save(); err != nil {
+	if err := saveLocked(); err != nil {
+		mu.Unlock()
 		return 0
 	}
+	mu.Unlock()
 	for _, entry := range removed {
 		removeAssetFiles(entry)
 	}
@@ -966,6 +974,7 @@ func serveAsset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeFile(w, r, filepath.Join(assetDir(), cleanID))
 }
 

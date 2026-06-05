@@ -219,6 +219,24 @@ func TestPostItemsAcceptsImageAndCreatesThumbnail(t *testing.T) {
 	}
 }
 
+func TestHomePageIncludesImageRenderingSupport(t *testing.T) {
+	resetTestState(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("home status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	for _, marker := range []string{"entry-image", "imageInput", "renderEntry", "/api/items"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("home page missing marker %q", marker)
+		}
+	}
+}
+
 func TestDeleteMovesEntryToTrashAndRestore(t *testing.T) {
 	resetTestState(t)
 

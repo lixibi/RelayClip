@@ -78,6 +78,10 @@
             border: 1px solid var(--border);
             color: var(--text);
         }
+        #latest.is-image {
+            padding: 12px;
+            white-space: normal;
+        }
         button {
             padding: 14px 20px;
             margin: 6px 0;
@@ -94,6 +98,10 @@
         }
         .btn-update {
             background: var(--success);
+            color: white;
+        }
+        .btn-image {
+            background: #0f766e;
             color: white;
         }
         .btn-paste {
@@ -136,6 +144,54 @@
             overflow-wrap: anywhere;
             white-space: pre-wrap;
         }
+        .history-item.is-image {
+            white-space: normal;
+        }
+        .entry-image {
+            display: block;
+            width: 100%;
+            max-height: 420px;
+            object-fit: contain;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+        .entry-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            margin-top: 8px;
+            color: var(--label);
+            font-size: 13px;
+            white-space: normal;
+        }
+        .entry-meta a {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .file-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 8px;
+        }
+        .file-row button {
+            width: auto;
+            flex: 0 0 auto;
+            margin: 0;
+        }
+        input[type="file"] {
+            width: 100%;
+            min-width: 0;
+            padding: 12px;
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            font: inherit;
+        }
         @media (max-width: 420px) {
             body {
                 padding: 12px;
@@ -145,6 +201,12 @@
             }
             .input-row {
                 flex-direction: column;
+            }
+            .file-row {
+                flex-direction: column;
+            }
+            .file-row button {
+                width: 100%;
             }
             .btn-paste {
                 width: 100%;
@@ -203,6 +265,10 @@
             <button class="btn-paste" id="pasteBtn">📋</button>
         </div>
         <button class="btn-update" id="updateBtn">更新</button>
+        <div class="file-row">
+            <input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/*">
+            <button class="btn-image" id="imageBtn">上传图片</button>
+        </div>
     </div>
 
     <!-- 历史记录 -->
@@ -237,24 +303,82 @@
         // 初始化主题
         applyTheme();
 
+        let currentLatest = null;
+
+        function assetURL(path) {
+            if (!path) return '';
+            return new URL(path, window.location.origin).href;
+        }
+
+        function imageMeta(item) {
+            const parts = [];
+            if (item.file_name) parts.push(item.file_name);
+            if (item.width && item.height) parts.push(`${item.width}×${item.height}`);
+            if (item.byte_count) parts.push(`${Math.round(item.byte_count / 1024)} KB`);
+            return parts.join(' · ');
+        }
+
+        function isImageEntry(item) {
+            return item && (item.kind === 'image' || item.category === 'image');
+        }
+
+        function renderEntry(container, item, compact = false) {
+            container.textContent = '';
+            container.classList.toggle('is-image', isImageEntry(item));
+
+            if (!item) {
+                container.textContent = '暂无数据';
+                return;
+            }
+
+            if (!isImageEntry(item)) {
+                container.textContent = item.content || '';
+                return;
+            }
+
+            const image = document.createElement('img');
+            image.className = 'entry-image';
+            image.loading = compact ? 'lazy' : 'eager';
+            image.alt = item.file_name || `图片 #${item.id}`;
+            image.src = assetURL(item.thumbnail_url || item.asset_url);
+            container.appendChild(image);
+
+            const meta = document.createElement('div');
+            meta.className = 'entry-meta';
+            meta.append(document.createTextNode(imageMeta(item) || '图片'));
+
+            if (item.asset_url) {
+                const link = document.createElement('a');
+                link.href = assetURL(item.asset_url);
+                link.target = '_blank';
+                link.rel = 'noopener';
+                link.textContent = '打开原图';
+                meta.appendChild(link);
+            }
+
+            container.appendChild(meta);
+        }
+
         async function load() {
             try {
                 let res = await fetch('/api/list');
                 let data = await res.json();
                 if (data.length === 0) {
-                    document.getElementById('latest').textContent = '暂无数据';
+                    currentLatest = null;
+                    renderEntry(document.getElementById('latest'), null);
                     return;
                 }
 
                 let latest = data[data.length-1];
-                document.getElementById('latest').textContent = latest.content || '';
+                currentLatest = latest;
+                renderEntry(document.getElementById('latest'), latest);
 
                 const history = document.getElementById('history');
                 history.textContent = '';
                 for (let item of data.slice().reverse().slice(0, 8)) {
                     const div = document.createElement('div');
                     div.className = 'history-item';
-                    div.textContent = item.content || '';
+                    renderEntry(div, item, true);
                     history.appendChild(div);
                 }
             } catch(e) {
@@ -274,7 +398,11 @@
 
         // 复制（兼容 iOS Safari）
         document.getElementById('copyBtn').addEventListener('click', () => {
-            const text = document.getElementById('latest').textContent;
+            if (!currentLatest) return;
+
+            const text = isImageEntry(currentLatest)
+                ? assetURL(currentLatest.asset_url || currentLatest.thumbnail_url)
+                : currentLatest.content;
             if (!text || text === '加载中...' || text === '加载失败') return;
 
             copyToClipboard(text);
@@ -332,6 +460,30 @@
                 load();
             } catch(e) {
                 showToast('更新失败', true);
+            }
+        });
+
+        document.getElementById('imageBtn').addEventListener('click', async () => {
+            const input = document.getElementById('imageInput');
+            const file = input.files && input.files[0];
+            if (!file) {
+                showToast('请选择图片文件', true);
+                return;
+            }
+
+            try {
+                const form = new FormData();
+                form.append('image', file, file.name || 'upload-image');
+                const res = await fetch('/api/items', {
+                    method: 'POST',
+                    body: form
+                });
+                if (!res.ok) throw new Error(await res.text());
+                input.value = '';
+                showToast('图片已上传');
+                load();
+            } catch(e) {
+                showToast('图片上传失败', true);
             }
         });
 
