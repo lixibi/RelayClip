@@ -2932,9 +2932,9 @@ private struct HelpView: View {
 
                     HelpCard(
                         title: "本地和云端",
-                        systemImage: "icloud.fill",
+                        systemImage: "externaldrive.fill.badge.checkmark",
                         items: [
-                            "云图标表示这条内容与云端一致。",
+                            "默认内容来自你自己的云端服务器，列表不再额外显示云朵图标。",
                             "铅笔图标表示这条内容在本机修改过。",
                             "长按菜单里的“更新”会用云端内容覆盖这一条本地记录。",
                             "编辑本地文本不会上传到服务器。"
