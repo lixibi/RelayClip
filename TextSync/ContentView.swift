@@ -1871,7 +1871,7 @@ private struct CategoryFilterView: View {
     @Binding var selectedCategory: EntryCategoryFilter
     let countProvider: (EntryCategoryFilter) -> Int
     private let columns = [
-        GridItem(.adaptive(minimum: 94), spacing: 8)
+        GridItem(.adaptive(minimum: 138), spacing: 8)
     ]
 
     private var visibleCategories: [EntryCategoryFilter] {
@@ -1897,6 +1897,7 @@ private struct CategoryFilterView: View {
 
                             Text(category.title)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.86)
 
                             Spacer(minLength: 4)
 
@@ -1910,7 +1911,7 @@ private struct CategoryFilterView: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(selectedCategory == category ? .white : Color.textSyncBrown)
                         .padding(.horizontal, 10)
-                        .frame(maxWidth: .infinity, minHeight: 36)
+                        .frame(maxWidth: .infinity, minHeight: 38)
                         .background(
                             Capsule().fill(selectedCategory == category ? Color.textSyncTeal : Color.textSyncPaper)
                         )
@@ -2451,45 +2452,28 @@ private struct HistoryRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                if entry.isPinned {
-                    Label("#\(entry.id)", systemImage: "pin.fill")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Color.textSyncTeal)
-                } else {
-                    Text("#\(entry.id)")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Color.textSyncTeal)
-                }
-
-                Spacer()
-
-                HStack(spacing: 6) {
-                    if isLatest {
-                        StatusIcon(systemName: "sparkles", color: Color.textSyncWarning, label: "最新")
-                    }
-
-                    if entry.isLocallyEdited {
-                        StatusIcon(systemName: "pencil.circle.fill", color: Color.textSyncWarning, label: "本地修改")
-                    } else {
-                        StatusIcon(systemName: "icloud.fill", color: Color.textSyncTeal, label: "云端一致")
-                    }
-                }
-
-                Text(entry.time.textSyncFormatted)
-                    .font(.caption)
-                    .foregroundStyle(Color.textSyncMuted)
-            }
-
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 CategoryIcon(entry: entry)
 
-                if let action = entry.primaryAction {
-                    Label(action.value, systemImage: action.systemImage)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(Color.textSyncMuted)
-                        .lineLimit(1)
+                if entry.isPinned {
+                    StatusIcon(systemName: "pin.fill", color: Color.textSyncTeal, label: "置顶")
                 }
+
+                if isLatest {
+                    StatusIcon(systemName: "sparkles", color: Color.textSyncWarning, label: "最新")
+                }
+
+                if entry.isLocallyEdited {
+                    StatusIcon(systemName: "pencil.circle.fill", color: Color.textSyncWarning, label: "本地修改")
+                }
+
+                Spacer(minLength: 8)
+
+                Text(entry.time.textSyncFormatted)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.textSyncMuted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
             }
 
             if entry.isImage {
@@ -2620,6 +2604,8 @@ private struct CategoryIcon: View {
         Label(category.title, systemImage: category.systemImage)
             .font(.caption2.weight(.bold))
             .foregroundStyle(Color.textSyncBrown)
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(Capsule().fill(Color.textSyncPanel.opacity(0.78)))
