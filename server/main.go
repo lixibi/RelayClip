@@ -452,6 +452,34 @@ func permanentlyDeleteEntry(id int) bool {
 	return true
 }
 
+func permanentlyDeleteTrash(category string) int {
+	var removed []Entry
+	normalized := normalizedCategory(category)
+
+	mu.Lock()
+	kept := entries[:0]
+	for _, entry := range entries {
+		if entry.DeletedAt != nil && (normalized == "" || entry.Category == normalized) {
+			removed = append(removed, entry)
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	entries = kept
+	mu.Unlock()
+
+	if len(removed) == 0 {
+		return 0
+	}
+	if err := save(); err != nil {
+		return 0
+	}
+	for _, entry := range removed {
+		removeAssetFiles(entry)
+	}
+	return len(removed)
+}
+
 func removeAssetFiles(entry Entry) {
 	for _, assetID := range []string{entry.AssetID, entry.ThumbnailID} {
 		if assetID == "" {
@@ -756,6 +784,16 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	case "/api/trash":
 		list := listEntries(true, true, normalizedCategory(r.URL.Query().Get("category")))
 		data, _ := json.Marshal(list)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+
+	case "/api/trash/permanent":
+		if r.Method != http.MethodDelete {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		result := map[string]int{"deleted": permanentlyDeleteTrash(r.URL.Query().Get("category"))}
+		data, _ := json.Marshal(result)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 

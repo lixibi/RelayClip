@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -307,6 +308,64 @@ func TestDeleteMovesEntryToTrashAndRestore(t *testing.T) {
 	}
 	if len(allItems) != 1 || int(allItems[0]["id"].(float64)) != 1 {
 		t.Fatalf("all list after permanent delete mismatch: %#v", allItems)
+	}
+}
+
+func TestPermanentlyDeleteTrash(t *testing.T) {
+	resetTestState(t)
+
+	for _, content := range []string{"one", "two", "three"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/post", strings.NewReader(content))
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("post status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+
+	for _, id := range []int{0, 2} {
+		req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/items/%d", id), nil)
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("delete %d status = %d, want %d: %s", id, rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/trash/permanent", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete trash status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var result map[string]int
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode delete trash result: %v", err)
+	}
+	if result["deleted"] != 2 {
+		t.Fatalf("deleted count = %d, want 2", result["deleted"])
+	}
+
+	trashReq := httptest.NewRequest(http.MethodGet, "/api/trash", nil)
+	trashRec := httptest.NewRecorder()
+	handler(trashRec, trashReq)
+	var trashItems []map[string]interface{}
+	if err := json.Unmarshal(trashRec.Body.Bytes(), &trashItems); err != nil {
+		t.Fatalf("decode trash list: %v", err)
+	}
+	if len(trashItems) != 0 {
+		t.Fatalf("trash list length = %d, want 0: %#v", len(trashItems), trashItems)
+	}
+
+	allReq := httptest.NewRequest(http.MethodGet, "/api/items?include_deleted=1", nil)
+	allRec := httptest.NewRecorder()
+	handler(allRec, allReq)
+	var allItems []map[string]interface{}
+	if err := json.Unmarshal(allRec.Body.Bytes(), &allItems); err != nil {
+		t.Fatalf("decode all list: %v", err)
+	}
+	if len(allItems) != 1 || int(allItems[0]["id"].(float64)) != 1 {
+		t.Fatalf("all list after delete trash mismatch: %#v", allItems)
 	}
 }
 

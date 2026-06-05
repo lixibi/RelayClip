@@ -328,6 +328,17 @@ final class TextSyncService {
         try validate(response)
     }
 
+    func permanentlyDeleteTrash(serverAddress: String, category: EntryCategoryFilter = .all) async throws {
+        var queryItems: [URLQueryItem] = []
+        if category != .all {
+            queryItems.append(URLQueryItem(name: "category", value: category.rawValue))
+        }
+        var request = URLRequest(url: try endpoint("/api/trash/permanent", serverAddress: serverAddress, queryItems: queryItems))
+        request.httpMethod = "DELETE"
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     func restoreEntry(_ entry: SyncEntry, serverAddress: String) async throws {
         var request = URLRequest(url: try endpoint("/api/items/\(entry.id)/restore", serverAddress: serverAddress))
         request.httpMethod = "POST"
@@ -579,6 +590,7 @@ final class TextSyncLocalStore {
 
     func merge(_ remoteEntries: [SyncEntry], serverAddress: String, preserveLocalEdits: Bool) throws {
         let serverKey = cacheServerKey(serverAddress)
+        let remoteIDs = Set(remoteEntries.map(\.id))
         for entry in remoteEntries {
             let object = try cachedObject(id: entry.id, serverAddress: serverKey) ?? NSEntityDescription.insertNewObject(forEntityName: "CachedEntry", into: container.viewContext)
             let shouldKeepLocalContent = preserveLocalEdits && (object.value(forKey: "isLocallyEdited") as? Bool ?? false)
@@ -600,7 +612,25 @@ final class TextSyncLocalStore {
                 object.setValue(false, forKey: "isLocallyEdited")
             }
         }
+        try pruneRemoteEntries(missingFrom: remoteIDs, serverAddress: serverKey)
         try saveIfNeeded()
+    }
+
+    private func pruneRemoteEntries(missingFrom remoteIDs: Set<Int>, serverAddress serverKey: String) throws {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "CachedEntry")
+        if serverKey.isEmpty {
+            request.predicate = NSPredicate(format: "serverAddress == nil")
+        } else {
+            request.predicate = NSPredicate(format: "serverAddress == %@ OR serverAddress == nil", serverKey)
+        }
+
+        let objects = try container.viewContext.fetch(request)
+        for object in objects {
+            let id = Int(object.value(forKey: "id") as? Int64 ?? -1)
+            if !remoteIDs.contains(id) {
+                container.viewContext.delete(object)
+            }
+        }
     }
 
     func markHidden(id: Int, serverAddress: String, isHidden: Bool) throws {
@@ -1117,6 +1147,21 @@ final class TextSyncViewModel: ObservableObject {
         }
     }
 
+    func permanentlyDeleteAllTrashRemote() async {
+        guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message = "请先设置服务器地址"
+            return
+        }
+
+        do {
+            try await service.permanentlyDeleteTrash(serverAddress: serverAddress)
+            await refresh(allowOverwriteLocalEdits: false)
+            message = "已清空回收站"
+        } catch {
+            message = "清空回收站失败：\(error.localizedDescription)"
+        }
+    }
+
     func loadMoreHistory() {
         visibleHistoryCount = min(visibleHistoryCount + pageSize, history.count)
     }
@@ -1418,6 +1463,9 @@ struct ContentView: View {
                     },
                     permanentDeleteAction: { entry in
                         Task { await viewModel.permanentlyDeleteRemote(entry) }
+                    },
+                    permanentDeleteAllAction: {
+                        Task { await viewModel.permanentlyDeleteAllTrashRemote() }
                     }
                 )
                 .presentationDetents([.medium, .large])
@@ -1825,7 +1873,9 @@ private struct TrashView: View {
     let serverAddress: String
     let restoreAction: (SyncEntry) -> Void
     let permanentDeleteAction: (SyncEntry) -> Void
+    let permanentDeleteAllAction: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var isDeleteAllPresented = false
 
     var body: some View {
         NavigationStack {
@@ -1881,6 +1931,24 @@ private struct TrashView: View {
                         dismiss()
                     }
                 }
+
+                ToolbarItem(placement: .primaryAction) {
+                    if !entries.isEmpty {
+                        Button(role: .destructive) {
+                            isDeleteAllPresented = true
+                        } label: {
+                            Label("全部永久删除", systemImage: "trash.slash.fill")
+                        }
+                    }
+                }
+            }
+            .alert("全部永久删除？", isPresented: $isDeleteAllPresented) {
+                Button("取消", role: .cancel) {}
+                Button("全部永久删除", role: .destructive) {
+                    permanentDeleteAllAction()
+                }
+            } message: {
+                Text("这会从远端回收站彻底删除所有内容，操作不可撤销。")
             }
         }
     }
