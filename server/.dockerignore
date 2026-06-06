@@ -5,5 +5,5 @@ keyserver-static
 *.pid
 *.log
 data/
-textsync-deploy/
+relayclip-deploy/
 hebetext-deploy/

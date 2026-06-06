@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct TextSyncApp: App {
+struct RelayClipApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

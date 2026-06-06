@@ -26,14 +26,14 @@ struct UploadClipboardTextIntent: AppIntent {
         }
 
         let serverAddress = try await MainActor.run {
-            try TextSyncLocalStore().serverAddress()
+            try RelayClipLocalStore().serverAddress()
         }
 
         guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .result(dialog: "请先在 RelayClip 中设置服务器地址")
         }
 
-        try await TextSyncService().post(content, serverAddress: serverAddress)
+        try await RelayClipService().post(content, serverAddress: serverAddress)
         return .result(dialog: "已上传文本")
     }
 
@@ -66,14 +66,14 @@ struct FetchRemoteTextIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let serverAddress = try await MainActor.run {
-            try TextSyncLocalStore().serverAddress()
+            try RelayClipLocalStore().serverAddress()
         }
 
         guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .result(dialog: "请先在 RelayClip 中设置服务器地址")
         }
 
-        let service = TextSyncService()
+        let service = RelayClipService()
         let latestContent = try await service.latestTextContent(serverAddress: serverAddress)
         guard !latestContent.isEmpty else {
             return .result(dialog: "服务器暂无文本")
@@ -82,7 +82,7 @@ struct FetchRemoteTextIntent: AppIntent {
         let entries = (try? await service.listEntries(serverAddress: serverAddress)) ?? []
 
         try await MainActor.run {
-            let store = TextSyncLocalStore()
+            let store = RelayClipLocalStore()
             if !entries.isEmpty {
                 try store.merge(entries, serverAddress: serverAddress, preserveLocalEdits: true)
             }
@@ -94,7 +94,7 @@ struct FetchRemoteTextIntent: AppIntent {
 }
 
 struct OpenQuickPanelIntent: AppIntent {
-    static let requestKey = "TextSyncOpenQuickPanelRequested"
+    static let requestKey = "RelayClipOpenQuickPanelRequested"
     static var title: LocalizedStringResource = "打开快捷面板"
     static var description = IntentDescription("打开 RelayClip，并显示半屏快捷面板。")
     static var openAppWhenRun = true
@@ -105,7 +105,7 @@ struct OpenQuickPanelIntent: AppIntent {
     }
 }
 
-struct TextSyncShortcuts: AppShortcutsProvider {
+struct RelayClipShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: UploadClipboardTextIntent(),

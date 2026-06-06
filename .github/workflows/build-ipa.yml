@@ -1,4 +1,4 @@
-name: TextSync CI
+name: RelayClip CI
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
       - main
 
 env:
-  DOCKER_IMAGE: ghcr.io/lixibi/textsync-server
+  DOCKER_IMAGE: ghcr.io/lixibi/relayclip-server
 
 permissions:
   contents: write
@@ -31,8 +31,8 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild \
-            -project TextSync.xcodeproj \
-            -scheme TextSync \
+            -project RelayClip.xcodeproj \
+            -scheme RelayClip \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -45,18 +45,18 @@ jobs:
       - name: Package IPA
         run: |
           set -euo pipefail
-          APP_PATH="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Release-iphoneos/TextSync.app" -type d | head -n 1)"
+          APP_PATH="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Release-iphoneos/RelayClip.app" -type d | head -n 1)"
           test -n "$APP_PATH"
-          rm -rf Payload TextSync.ipa
+          rm -rf Payload RelayClip.ipa
           mkdir Payload
           cp -R "$APP_PATH" Payload/
-          zip -qry TextSync.ipa Payload
+          zip -qry RelayClip.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: TextSync-ipa
-          path: TextSync.ipa
+          name: RelayClip-ipa
+          path: RelayClip.ipa
 
       - name: Publish latest IPA release
         if: github.ref == 'refs/heads/main'
@@ -64,7 +64,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Release-iphoneos/TextSync.app" -type d | head -n 1)"
+          app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Release-iphoneos/RelayClip.app" -type d | head -n 1)"
           version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Info.plist")"
           build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_path/Info.plist")"
           version_tag="ios-v${version}-${build}"
@@ -89,18 +89,18 @@ jobs:
           git push -f origin "refs/tags/$version_tag" "refs/tags/$latest_tag"
 
           if gh release view "$version_tag" >/dev/null 2>&1; then
-            gh release edit "$version_tag" --title "TextSync ${version} (${build})" --notes-file RELEASE_NOTES.md
+            gh release edit "$version_tag" --title "RelayClip ${version} (${build})" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$version_tag" --title "TextSync ${version} (${build})" --notes-file RELEASE_NOTES.md
+            gh release create "$version_tag" --title "RelayClip ${version} (${build})" --notes-file RELEASE_NOTES.md
           fi
-          gh release upload "$version_tag" TextSync.ipa --clobber
+          gh release upload "$version_tag" RelayClip.ipa --clobber
 
           if gh release view "$latest_tag" >/dev/null 2>&1; then
-            gh release edit "$latest_tag" --title "Latest TextSync IPA" --notes-file RELEASE_NOTES.md
+            gh release edit "$latest_tag" --title "Latest RelayClip IPA" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$latest_tag" --title "Latest TextSync IPA" --notes-file RELEASE_NOTES.md
+            gh release create "$latest_tag" --title "Latest RelayClip IPA" --notes-file RELEASE_NOTES.md
           fi
-          gh release upload "$latest_tag" TextSync.ipa --clobber
+          gh release upload "$latest_tag" RelayClip.ipa --clobber
 
   build-docker:
     runs-on: ubuntu-latest

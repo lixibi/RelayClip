@@ -2,7 +2,7 @@
 
 RelayClip 是一个自建的剪贴板、文本和图片共享平台。你在自己的服务器上运行一个轻量 Go 服务端，然后用 iOS、macOS 或网页客户端在多台设备之间保存、上传、获取和管理内容。
 
-它以前叫 TextSync。现在项目已经不只是“文本同步”：它支持图片上传、缩略图、原图查看、链接/邮箱/电话提取、回收站、快捷指令和 macOS 菜单栏工作流，所以更适合作为一个自部署的个人剪贴板平台来发布。
+它支持图片上传、缩略图、原图查看、链接/邮箱/电话提取、回收站、快捷指令和 macOS 菜单栏工作流，适合作为一个自部署的个人剪贴板平台来使用和二次开发。
 
 ## 适合什么场景
 
@@ -55,16 +55,16 @@ https://clip.example.com
 
 ## 部署服务端
 
-服务端镜像由 GitHub Actions 发布到 GHCR。当前镜像名沿用旧项目名，方便兼容已有部署：
+服务端镜像由 GitHub Actions 发布到 GHCR：
 
 ```bash
-ghcr.io/lixibi/textsync-server:latest
+ghcr.io/lixibi/relayclip-server:latest
 ```
 
 推荐部署命令：
 
 ```bash
-docker pull ghcr.io/lixibi/textsync-server:latest
+docker pull ghcr.io/lixibi/relayclip-server:latest
 docker volume create relayclip-data
 docker run -d \
   --name relayclip-server \
@@ -72,7 +72,7 @@ docker run -d \
   -p 17006:8080 \
   -v relayclip-data:/data \
   -e KEYSERVER_DATA_FILE=/data/keys.json \
-  ghcr.io/lixibi/textsync-server:latest
+  ghcr.io/lixibi/relayclip-server:latest
 ```
 
 部署完成后，浏览器访问：
@@ -123,9 +123,9 @@ macOS 客户端的推荐用法：
 ## 服务端 API
 
 - `GET /api/health`：健康检查和计数。
-- `GET /api/get`：获取最新文本，兼容旧客户端。
-- `POST /api/post`：上传文本，兼容旧客户端。
-- `GET /api/list`：列出记录，兼容旧客户端。
+- `GET /api/get`：获取最新文本。
+- `POST /api/post`：上传文本。
+- `GET /api/list`：列出记录。
 - `GET /api/items`：列出记录，支持 `category`、`include_deleted`、`trash` 查询。
 - `POST /api/items`：上传文本或 multipart 图片。
 - `GET /api/items/latest`：获取最新记录 JSON。
@@ -150,15 +150,10 @@ go run .
 iOS：
 
 ```bash
-xcodebuild -project TextSync.xcodeproj -scheme TextSync -destination 'generic/platform=iOS Simulator' build
+xcodebuild -project RelayClip.xcodeproj -scheme RelayClip -destination 'generic/platform=iOS Simulator' build
 ```
 
-macOS 客户端：
-
-```bash
-cd /Users/lee/Documents/TextSync-macOS
-swift build
-```
+macOS 客户端源码按本机独立目录维护，不放进当前 iOS/server 仓库。
 
 ## 数据存储
 
@@ -172,9 +167,8 @@ swift build
 
 ## 发布说明
 
-- 项目公开名称：RelayClip
-- 旧名称：TextSync
-- Docker 镜像：`ghcr.io/lixibi/textsync-server:latest`
+- 项目名称：RelayClip
+- Docker 镜像：`ghcr.io/lixibi/relayclip-server:latest`
 - 默认端口：容器内 `8080`，推荐映射到宿主机 `17006`
 - 推荐部署方式：Docker + 持久化 volume + HTTPS 反向代理
 

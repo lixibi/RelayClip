@@ -3,7 +3,7 @@
 Published image:
 
 ```bash
-ghcr.io/lixibi/textsync-server:latest
+ghcr.io/lixibi/relayclip-server:latest
 ```
 
 Standalone binary:
@@ -15,7 +15,7 @@ Standalone binary:
 Pull and run:
 
 ```bash
-docker pull ghcr.io/lixibi/textsync-server:latest
+docker pull ghcr.io/lixibi/relayclip-server:latest
 docker volume create relayclip-data
 docker run -d \
   --name relayclip-server \
@@ -23,7 +23,7 @@ docker run -d \
   -p 17006:8080 \
   -v relayclip-data:/data \
   -e KEYSERVER_DATA_FILE=/data/keys.json \
-  ghcr.io/lixibi/textsync-server:latest
+  ghcr.io/lixibi/relayclip-server:latest
 ```
 
 Open:

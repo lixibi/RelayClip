@@ -34,13 +34,13 @@ https://clip.example.com
 GitHub Actions 会发布：
 
 ```bash
-ghcr.io/lixibi/textsync-server:latest
+ghcr.io/lixibi/relayclip-server:latest
 ```
 
 ## 推荐部署
 
 ```bash
-docker pull ghcr.io/lixibi/textsync-server:latest
+docker pull ghcr.io/lixibi/relayclip-server:latest
 docker volume create relayclip-data
 docker run -d \
   --name relayclip-server \
@@ -48,7 +48,7 @@ docker run -d \
   -p 17006:8080 \
   -v relayclip-data:/data \
   -e KEYSERVER_DATA_FILE=/data/keys.json \
-  ghcr.io/lixibi/textsync-server:latest
+  ghcr.io/lixibi/relayclip-server:latest
 ```
 
 访问：
@@ -97,7 +97,7 @@ GET /api/health
 
 返回 active、trash、total 和分类计数。
 
-### 文本兼容接口
+### 文本接口
 
 ```http
 GET  /api/get
@@ -154,11 +154,11 @@ go run .
 默认监听 `:8080`。可以通过环境变量指定数据文件：
 
 ```bash
-KEYSERVER_DATA_FILE=/tmp/textsync/keys.json go run .
+KEYSERVER_DATA_FILE=/tmp/relayclip/keys.json go run .
 ```
 
 也可以指定图片目录：
 
 ```bash
-KEYSERVER_ASSET_DIR=/tmp/textsync/assets go run .
+KEYSERVER_ASSET_DIR=/tmp/relayclip/assets go run .
 ```

@@ -1,18 +1,18 @@
 version: '3.8'
 
 services:
-  textsync-server:
+  relayclip-server:
     build: .
-    image: ghcr.io/lixibi/textsync-server:latest
-    container_name: textsync-server
+    image: ghcr.io/lixibi/relayclip-server:latest
+    container_name: relayclip-server
     ports:
       - "17006:8080"
     volumes:
-      - textsync-data:/data
+      - relayclip-data:/data
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
       - KEYSERVER_DATA_FILE=/data/keys.json
 
 volumes:
-  textsync-data:
+  relayclip-data:

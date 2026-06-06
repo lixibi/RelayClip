@@ -367,7 +367,7 @@ enum HistoryListItem: Identifiable, Equatable {
     }
 }
 
-enum TextSyncError: LocalizedError {
+enum RelayClipError: LocalizedError {
     case invalidServer
     case requestFailed(Int)
 
@@ -389,7 +389,7 @@ enum ServerAddress {
         }
 
         guard !value.isEmpty else {
-            throw TextSyncError.invalidServer
+            throw RelayClipError.invalidServer
         }
 
         if !value.contains("://") {
@@ -400,7 +400,7 @@ enum ServerAddress {
               let scheme = components.scheme?.lowercased(),
               scheme == "https" || scheme == "http",
               components.host != nil else {
-            throw TextSyncError.invalidServer
+            throw RelayClipError.invalidServer
         }
 
         return value
@@ -411,7 +411,7 @@ enum ServerAddress {
     }
 }
 
-final class TextSyncService {
+final class RelayClipService {
     private let session: URLSession
     private let decoder: JSONDecoder
 
@@ -469,7 +469,7 @@ final class TextSyncService {
 
     func postImage(_ imageData: Data, fileName: String, mimeType: String, serverAddress: String) async throws {
         let url = try endpoint("/api/items", serverAddress: serverAddress)
-        let boundary = "TextSyncBoundary-\(UUID().uuidString)"
+        let boundary = "RelayClipBoundary-\(UUID().uuidString)"
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -523,12 +523,12 @@ final class TextSyncService {
     private func endpoint(_ path: String, serverAddress: String, queryItems: [URLQueryItem] = []) throws -> URL {
         let normalized = try ServerAddress.normalized(serverAddress)
         guard var components = URLComponents(string: normalized) else {
-            throw TextSyncError.invalidServer
+            throw RelayClipError.invalidServer
         }
         components.path = path
         components.queryItems = queryItems.isEmpty ? nil : queryItems
         guard let url = components.url else {
-            throw TextSyncError.invalidServer
+            throw RelayClipError.invalidServer
         }
         return url
     }
@@ -553,7 +553,7 @@ final class TextSyncService {
     private func validate(_ response: URLResponse) throws {
         guard let httpResponse = response as? HTTPURLResponse else { return }
         guard 200..<300 ~= httpResponse.statusCode else {
-            throw TextSyncError.requestFailed(httpResponse.statusCode)
+            throw RelayClipError.requestFailed(httpResponse.statusCode)
         }
     }
 }
@@ -614,7 +614,7 @@ enum ImageDiskCache {
 
     private static var cacheDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TextSyncImageCache", isDirectory: true)
+            .appendingPathComponent("RelayClipImageCache", isDirectory: true)
     }
 
     private static func fileURL(for remoteURL: URL, variant: String) -> URL {
@@ -628,7 +628,7 @@ enum ImageDiskCache {
 }
 
 @MainActor
-final class TextSyncLocalStore {
+final class RelayClipLocalStore {
     static let defaultAppTitle = "RelayClip"
 
     private let container: NSPersistentContainer
@@ -764,7 +764,7 @@ final class TextSyncLocalStore {
         settingEntity.properties = [key, value]
         model.entities = [entryEntity, settingEntity]
 
-        container = NSPersistentContainer(name: "TextSyncLocalStore", managedObjectModel: model)
+        container = NSPersistentContainer(name: "RelayClipLocalStore", managedObjectModel: model)
         let description = container.persistentStoreDescriptions.first
         description?.shouldMigrateStoreAutomatically = true
         description?.shouldInferMappingModelAutomatically = true
@@ -1034,7 +1034,7 @@ final class TextSyncLocalStore {
 }
 
 @MainActor
-final class TextSyncViewModel: ObservableObject {
+final class RelayClipViewModel: ObservableObject {
     private struct ClipboardImagePayload {
         let data: Data
         let fileName: String
@@ -1043,11 +1043,11 @@ final class TextSyncViewModel: ObservableObject {
 
     private let pageSize = 10
     private let maxClipboardImageBytes = 8 * 1024 * 1024
-    private let service = TextSyncService()
-    private let localStore = TextSyncLocalStore()
+    private let service = RelayClipService()
+    private let localStore = RelayClipLocalStore()
 
     @Published var serverAddress = ""
-    @Published var appTitle = TextSyncLocalStore.defaultAppTitle
+    @Published var appTitle = RelayClipLocalStore.defaultAppTitle
     @Published var draft = ""
     @Published var latestDraft = ""
     @Published var entries: [SyncEntry] = []
@@ -1068,7 +1068,7 @@ final class TextSyncViewModel: ObservableObject {
             appTitle = try localStore.appTitle()
         } catch {
             serverAddress = ""
-            appTitle = TextSyncLocalStore.defaultAppTitle
+            appTitle = RelayClipLocalStore.defaultAppTitle
         }
     }
 
@@ -1602,7 +1602,7 @@ final class TextSyncViewModel: ObservableObject {
 }
 
 struct ContentView: View {
-    @StateObject private var viewModel = TextSyncViewModel()
+    @StateObject private var viewModel = RelayClipViewModel()
     @State private var isSettingsPresented = false
     @State private var isHelpPresented = false
     @State private var isTrashPresented = false
@@ -1823,7 +1823,7 @@ private struct HeaderView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
-        .background(TextSyncPanelBackground(tint: Color.textSyncCream))
+        .background(RelayClipPanelBackground(tint: Color.textSyncCream))
     }
 }
 
@@ -1885,11 +1885,11 @@ private struct LatestTextView: View {
                 Label(entry?.isImage == true ? "复制最新图片" : "复制最新文本", systemImage: entry?.isImage == true ? "photo.on.rectangle" : "doc.on.doc.fill")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+            .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncTeal))
             .disabled(entry == nil)
         }
         .padding(16)
-        .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
+        .background(RelayClipPanelBackground(tint: Color.textSyncPanel))
     }
 
     private var editableText: Binding<String> {
@@ -1950,13 +1950,13 @@ private struct ComposerView: View {
                     Label("粘贴", systemImage: "doc.on.clipboard")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncBrown))
+                .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncBrown))
 
                 Button(action: sendAction) {
                     Label(isSending ? "上传中" : "上传", systemImage: "paperplane.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncGreen))
+                .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncGreen))
                 .disabled(isSending)
             }
 
@@ -1964,11 +1964,11 @@ private struct ComposerView: View {
                 Label(isSending ? "上传中" : "上传剪贴板图片", systemImage: "photo.fill")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+            .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncTeal))
             .disabled(isSending)
         }
         .padding(16)
-        .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
+        .background(RelayClipPanelBackground(tint: Color.textSyncPanel))
     }
 }
 
@@ -2029,7 +2029,7 @@ private struct CategoryFilterView: View {
             }
         }
         .padding(16)
-        .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
+        .background(RelayClipPanelBackground(tint: Color.textSyncPanel))
     }
 }
 
@@ -2109,7 +2109,7 @@ private struct HistorySection: View {
                         Label("加载更多", systemImage: "chevron.down.circle.fill")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+                    .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncTeal))
                     .textSyncListRow()
                 }
             }
@@ -2265,7 +2265,7 @@ private struct TrashView: View {
                                         Label("恢复", systemImage: "arrow.uturn.backward.circle.fill")
                                             .frame(maxWidth: .infinity)
                                     }
-                                    .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+                                    .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncTeal))
 
                                     Button(role: .destructive) {
                                         permanentDeleteAction(entry)
@@ -2273,7 +2273,7 @@ private struct TrashView: View {
                                         Label("永久删除", systemImage: "trash.fill")
                                             .frame(maxWidth: .infinity)
                                     }
-                                    .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncWarning))
+                                    .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncWarning))
                                 }
                             }
                             .textSyncListRow()
@@ -2561,7 +2561,7 @@ private struct EditHistoryEntryView: View {
                     Label("保存本地修改", systemImage: "checkmark.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+                .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncTeal))
 
                 Spacer()
             }
@@ -2841,7 +2841,7 @@ private struct SettingsView: View {
                     Label(isTestingConnection ? "测试中" : "测试连接", systemImage: "network")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncBrown))
+                .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncBrown))
                 .disabled(isTestingConnection)
 
                 if let connectionTestMessage {
@@ -2857,7 +2857,7 @@ private struct SettingsView: View {
                     Label("保存并同步", systemImage: "checkmark.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+                .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncTeal))
 
                 Button {
                     isResetConfirmationPresented = true
@@ -2865,7 +2865,7 @@ private struct SettingsView: View {
                     Label("重置本地数据", systemImage: "arrow.counterclockwise.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncWarning))
+                .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncWarning))
 
                 Spacer()
             }
@@ -2890,11 +2890,11 @@ private struct HelpView: View {
     @Environment(\.openURL) private var openURL
     @State private var updateStatus = "尚未检查更新"
     @State private var isCheckingUpdate = false
-    @State private var latestReleaseURL = URL(string: "https://github.com/lixibi/iosTextSync/releases/tag/latest-ipa")!
+    @State private var latestReleaseURL = URL(string: "https://github.com/lixibi/RelayClip/releases/tag/latest-ipa")!
     @State private var latestAssetURL: URL?
 
-    private let projectURL = URL(string: "https://github.com/lixibi/iosTextSync")!
-    private let latestReleaseAPIURL = URL(string: "https://api.github.com/repos/lixibi/iosTextSync/releases/tags/latest-ipa")!
+    private let projectURL = URL(string: "https://github.com/lixibi/RelayClip")!
+    private let latestReleaseAPIURL = URL(string: "https://api.github.com/repos/lixibi/RelayClip/releases/tags/latest-ipa")!
 
     var body: some View {
         NavigationStack {
@@ -3107,21 +3107,21 @@ private struct UpdateHelpCard: View {
                     Label(isChecking ? "检查中" : "检查更新", systemImage: "arrow.clockwise")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncTeal))
+                .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncTeal))
                 .disabled(isChecking)
 
                 Button(action: openLatestAction) {
                     Label("最新版", systemImage: "square.and.arrow.down.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncGreen))
+                .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncGreen))
             }
 
             Button(action: openProjectAction) {
                 Label("打开 GitHub 项目", systemImage: "link")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(TextSyncPillButtonStyle(color: Color.textSyncBrown))
+            .buttonStyle(RelayClipPillButtonStyle(color: Color.textSyncBrown))
 
             Text("iOS 不允许普通 App 静默自我安装；这里会打开 GitHub 最新 Release 或 IPA 下载入口，由你按当前安装方式完成更新。")
                 .font(.caption)
@@ -3130,7 +3130,7 @@ private struct UpdateHelpCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
+        .background(RelayClipPanelBackground(tint: Color.textSyncPanel))
     }
 }
 
@@ -3163,7 +3163,7 @@ private struct HelpCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(TextSyncPanelBackground(tint: Color.textSyncPanel))
+        .background(RelayClipPanelBackground(tint: Color.textSyncPanel))
     }
 }
 
@@ -3211,7 +3211,7 @@ private struct AppBackground: View {
     }
 }
 
-private struct TextSyncPanelBackground: View {
+private struct RelayClipPanelBackground: View {
     let tint: Color
 
     var body: some View {
@@ -3225,7 +3225,7 @@ private struct TextSyncPanelBackground: View {
     }
 }
 
-private struct TextSyncPillButtonStyle: ButtonStyle {
+private struct RelayClipPillButtonStyle: ButtonStyle {
     let color: Color
 
     func makeBody(configuration: Configuration) -> some View {

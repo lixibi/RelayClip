@@ -2,8 +2,8 @@
 
 产物：
 
-- `ghcr.io/lixibi/textsync-server:latest`：GitHub Actions 发布的 Docker image
-- `/home/keyserver/RUN-TEXTSYNC.md`：运行说明
+- `ghcr.io/lixibi/relayclip-server:latest`：GitHub Actions 发布的 Docker image
+- `/home/keyserver/RUN-RELAYCLIP.md`：运行说明
 
 验证结果：
 
@@ -14,7 +14,7 @@
 推荐运行方式：
 
 ```bash
-docker pull ghcr.io/lixibi/textsync-server:latest
+docker pull ghcr.io/lixibi/relayclip-server:latest
 docker volume create relayclip-data
 docker run -d \
   --name relayclip-server \
@@ -22,5 +22,5 @@ docker run -d \
   -p 17006:8080 \
   -v relayclip-data:/data \
   -e KEYSERVER_DATA_FILE=/data/keys.json \
-  ghcr.io/lixibi/textsync-server:latest
+  ghcr.io/lixibi/relayclip-server:latest
 ```
