@@ -1,6 +1,6 @@
-# TextSync Server
+# RelayClip Server
 
-TextSync Server 是一个轻量 Go 服务，用来给 iOS、macOS 和网页客户端做远程剪贴板中转。它保持单体、简洁、易部署：文本记录存 JSON，图片保存在本地 assets 目录，Docker 一条命令即可运行。
+RelayClip Server 是一个轻量 Go 服务，用来给 iOS、macOS 和网页客户端做自建剪贴板、文本和图片共享。它保持单体、简洁、易部署：文本记录存 JSON，图片保存在本地 assets 目录，Docker 一条命令即可运行。
 
 ## 支持能力
 
@@ -25,12 +25,12 @@ ghcr.io/lixibi/textsync-server:latest
 
 ```bash
 docker pull ghcr.io/lixibi/textsync-server:latest
-docker volume create textsync-data
+docker volume create relayclip-data
 docker run -d \
-  --name textsync-server \
+  --name relayclip-server \
   --restart unless-stopped \
   -p 17006:8080 \
-  -v textsync-data:/data \
+  -v relayclip-data:/data \
   -e KEYSERVER_DATA_FILE=/data/keys.json \
   ghcr.io/lixibi/textsync-server:latest
 ```
@@ -44,7 +44,7 @@ http://服务器IP:17006
 客户端连接时填写同一个地址。公网使用建议配置 HTTPS 反代：
 
 ```caddy
-textsync.example.com {
+clip.example.com {
     reverse_proxy localhost:17006
 }
 ```
@@ -52,7 +52,7 @@ textsync.example.com {
 然后客户端填写：
 
 ```text
-https://textsync.example.com
+https://clip.example.com
 ```
 
 ## 数据目录
@@ -60,7 +60,7 @@ https://textsync.example.com
 Docker 命令里挂载了：
 
 ```text
-textsync-data:/data
+relayclip-data:/data
 ```
 
 服务端会写入：

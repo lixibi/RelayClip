@@ -15,12 +15,12 @@
 
 ```bash
 docker pull ghcr.io/lixibi/textsync-server:latest
-docker volume create textsync-data
+docker volume create relayclip-data
 docker run -d \
-  --name textsync-server \
+  --name relayclip-server \
   --restart unless-stopped \
   -p 17006:8080 \
-  -v textsync-data:/data \
+  -v relayclip-data:/data \
   -e KEYSERVER_DATA_FILE=/data/keys.json \
   ghcr.io/lixibi/textsync-server:latest
 ```

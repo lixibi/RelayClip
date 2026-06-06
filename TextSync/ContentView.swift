@@ -629,7 +629,7 @@ enum ImageDiskCache {
 
 @MainActor
 final class TextSyncLocalStore {
-    static let defaultAppTitle = "文本中转"
+    static let defaultAppTitle = "RelayClip"
 
     private let container: NSPersistentContainer
 
@@ -2796,7 +2796,7 @@ private struct SettingsView: View {
                     .font(.headline)
                     .foregroundStyle(Color.textSyncBrown)
 
-                TextField("文本中转", text: $appTitle)
+                TextField("RelayClip", text: $appTitle)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.callout)
@@ -2910,10 +2910,10 @@ private struct HelpView: View {
                     )
 
                     HelpCard(
-                        title: "文本中转是什么",
+                        title: "RelayClip 是什么",
                         systemImage: "bolt.horizontal.circle.fill",
                         items: [
-                            "把临时文本、链接、备忘和代码片段通过自己的服务器在多设备之间中转。",
+                            "把剪贴板、临时文本、链接、备忘、代码片段和图片通过自己的服务器在多设备之间共享。",
                             "服务端可自部署，App 只保存你设置的服务器地址。",
                             "自动同步和下拉同步都会保留本地修改，不会悄悄覆盖。"
                         ]
@@ -2956,7 +2956,7 @@ private struct HelpView: View {
                         systemImage: "wand.and.stars",
                         items: [
                             "可以上传剪贴板文本，也可以获取远程最新文本并复制。",
-                            "上传时建议在快捷指令里先使用“获取剪贴板”，再把结果传给 TextSync。",
+                            "上传时建议在快捷指令里先使用“获取剪贴板”，再把结果传给 RelayClip。",
                             "这样比让 App 自己读取剪贴板更稳定。"
                         ]
                     )

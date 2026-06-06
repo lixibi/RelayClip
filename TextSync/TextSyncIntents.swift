@@ -4,7 +4,7 @@ import UIKit
 
 struct UploadClipboardTextIntent: AppIntent {
     static var title: LocalizedStringResource = "上传剪贴板文本"
-    static var description = IntentDescription("将快捷指令传入的文本或当前剪贴板文本上传到已保存的 TextSync 服务器。")
+    static var description = IntentDescription("将快捷指令传入的文本或当前剪贴板文本上传到已保存的 RelayClip 服务器。")
     static var openAppWhenRun = false
 
     @Parameter(title: "文本", description: "可从快捷指令的“获取剪贴板”动作传入。留空时会尝试直接读取当前剪贴板。")
@@ -22,7 +22,7 @@ struct UploadClipboardTextIntent: AppIntent {
         let content = await Self.resolvedText(from: text)
 
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .result(dialog: "没有可上传的文本。建议在快捷指令里先添加“获取剪贴板”，再把结果传给 TextSync。")
+            return .result(dialog: "没有可上传的文本。建议在快捷指令里先添加“获取剪贴板”，再把结果传给 RelayClip。")
         }
 
         let serverAddress = try await MainActor.run {
@@ -30,7 +30,7 @@ struct UploadClipboardTextIntent: AppIntent {
         }
 
         guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .result(dialog: "请先在 TextSync 中设置服务器地址")
+            return .result(dialog: "请先在 RelayClip 中设置服务器地址")
         }
 
         try await TextSyncService().post(content, serverAddress: serverAddress)
@@ -70,7 +70,7 @@ struct FetchRemoteTextIntent: AppIntent {
         }
 
         guard !serverAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .result(dialog: "请先在 TextSync 中设置服务器地址")
+            return .result(dialog: "请先在 RelayClip 中设置服务器地址")
         }
 
         let service = TextSyncService()
@@ -96,12 +96,12 @@ struct FetchRemoteTextIntent: AppIntent {
 struct OpenQuickPanelIntent: AppIntent {
     static let requestKey = "TextSyncOpenQuickPanelRequested"
     static var title: LocalizedStringResource = "打开快捷面板"
-    static var description = IntentDescription("打开 TextSync，并显示半屏快捷面板。")
+    static var description = IntentDescription("打开 RelayClip，并显示半屏快捷面板。")
     static var openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         UserDefaults.standard.set(true, forKey: Self.requestKey)
-        return .result(dialog: "正在打开 TextSync 快捷面板")
+        return .result(dialog: "正在打开 RelayClip 快捷面板")
     }
 }
 
