@@ -3,6 +3,7 @@
 产物：
 
 - `ghcr.io/lixibi/relayclip-server:latest`：GitHub Actions 发布的 Docker image
+- `docker.io/lixibi/relayclip-server:latest`：Docker Hub 预留 image，配置 Docker Hub secrets 后发布
 - `/home/keyserver/RUN-RELAYCLIP.md`：运行说明
 
 验证结果：

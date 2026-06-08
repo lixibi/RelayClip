@@ -6,6 +6,12 @@ Published image:
 ghcr.io/lixibi/relayclip-server:latest
 ```
 
+Reserved Docker Hub image:
+
+```bash
+docker.io/lixibi/relayclip-server:latest
+```
+
 Standalone binary:
 
 ```bash

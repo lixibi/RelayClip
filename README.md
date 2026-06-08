@@ -1,70 +1,30 @@
 # RelayClip
 
-RelayClip 是一个自建的剪贴板、文本和图片共享平台。你在自己的服务器上运行一个轻量 Go 服务端，然后用 iOS、macOS 或网页客户端在多台设备之间保存、上传、获取和管理内容。
+RelayClip 是一个自建的剪贴板、文本和图片共享效率工具。你在自己的服务器上运行一个轻量服务端，然后用 iOS、macOS 和网页客户端在多台设备之间保存、上传、获取和管理内容。
 
-它支持图片上传、缩略图、原图查看、链接/邮箱/电话提取、回收站、快捷指令和 macOS 菜单栏工作流，适合作为一个自部署的个人剪贴板平台来使用和二次开发。
+它适合这些日常场景：
 
-## 适合什么场景
-
-- 从 iPhone 把文本、链接、邮箱、电话或图片发到自己的服务器。
-- 在另一台设备上一键获取最新文本，或从历史记录里复制。
-- 用 iOS 快捷指令上传剪贴板文本、获取远程最新文本。
-- 用 macOS 菜单栏客户端记录本地剪贴板，并按需一键发送到远程。
+- 从 iPhone 把链接、验证码、邮箱、电话、备忘或图片发到自己的服务器。
+- 在 Mac、iPad、浏览器或另一台设备上快速复制最近内容。
+- 用 iOS 快捷指令上传剪贴板文本，或获取服务器上的最新文本。
+- 用 macOS 菜单栏客户端记录本机剪贴板历史，需要时一键发到远程。
 - 临时保存图片，通过缩略图快速浏览，需要时打开原图。
-- 用浏览器直接访问服务端，完成文本和图片的基础上传、复制和预览。
 
-## 客户端
+## 当前状态
 
-| 客户端 | 状态 | 说明 |
+| 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| iOS | 已支持 | SwiftUI 原生客户端，支持历史记录、分类筛选、图片、回收站、半屏快捷面板、快捷指令和 GitHub 更新入口。 |
-| macOS | 已支持 | 菜单栏工具。默认只记录本机剪贴板历史，不自动发送到远程；可通过开关启用自动发送，也可一键发送到远程。macOS 源码按本机独立目录维护，不放进当前 iOS 仓库。 |
-| Web | 已支持 | 服务端自带网页客户端，浏览器访问服务器地址即可使用，支持文本和图片上传、复制、预览。 |
-| Shortcuts | 已支持 | iOS 快捷指令可上传剪贴板文本、获取最新远程文本；获取时会跳过图片，返回最新文本记录。 |
+| Server | 已支持 | Go 单体服务，内置网页端，支持文本、图片、缩略图、回收站和健康检查。 |
+| Web | 已支持 | 打开服务端地址即可使用，不需要单独部署前端。 |
+| iOS | 已支持 | SwiftUI 原生客户端，支持历史记录、分类、图片、回收站、快捷指令和 GitHub 更新入口。 |
+| macOS | 已支持 | 菜单栏效率工具，本地优先记录剪贴板，可手动或自动发送到远程。 |
+| Windows | 准备中 | 后续会按效率工具思路补 Windows 客户端，见 [Windows Client Plan](docs/windows-plan.md)。 |
 
-## 网页版
+## 快速开始
 
-RelayClip 的服务端自带网页版客户端，不需要单独部署前端。服务端启动后，直接在浏览器打开服务器地址就能使用：
-
-```text
-https://clip.example.com
-```
-
-网页版适合临时在没有安装 App 的设备上使用，也适合桌面浏览器快速查看和管理内容。它支持：
-
-- 查看最新文本和历史记录。
-- 上传文本、复制文本。
-- 上传图片、查看图片缩略图和预览。
-- 通过同一个自建服务器和 iOS、macOS 客户端共享数据。
-
-## 功能亮点
-
-- 自部署：服务端由你自己运行，客户端只保存你配置的服务器地址。
-- 文本和图片：支持普通文本、multipart 图片上传、缩略图生成、原图读取。
-- 智能分类：文本、图片、链接、邮箱、电话。
-- 内容提取：记录里包含链接、邮箱、电话时，客户端可直接打开网页、发邮件或拨号。
-- 图片体验：本地图片缓存、缩略图快速加载、原图查看。
-- 历史管理：置顶、隐藏、本地编辑、回收站、恢复、永久删除、清空回收站。
-- macOS 本地优先：后台剪贴板监听默认只写本机历史；只有手动点击或打开自动开关才发送到远程。
-- iOS 快捷指令：
-  - 上传剪贴板文本
-  - 获取远程文本，自动跳过图片记录，只取最新文本
-- 更新入口：帮助页可打开 GitHub 项目、检查最新 Release，并跳转到最新版下载入口。
-- 服务端健康检查：`GET /api/health`
-- 轻量存储：记录元数据保存在 JSON 文件中，图片文件保存在数据目录。
-
-## 部署服务端
-
-服务端镜像由 GitHub Actions 发布到 GHCR：
+如果你已经有一台 Linux 服务器，并且安装了 Docker，可以先用下面这一条命令跑起来：
 
 ```bash
-ghcr.io/lixibi/relayclip-server:latest
-```
-
-推荐部署命令：
-
-```bash
-docker pull ghcr.io/lixibi/relayclip-server:latest
 docker volume create relayclip-data
 docker run -d \
   --name relayclip-server \
@@ -75,13 +35,147 @@ docker run -d \
   ghcr.io/lixibi/relayclip-server:latest
 ```
 
-部署完成后，浏览器访问：
+然后在浏览器打开：
 
 ```text
 http://你的服务器IP:17006
 ```
 
-如果要公网长期使用，建议用 Caddy 或 Nginx 反向代理到 `17006`，并配置 HTTPS：
+如果页面能打开，就说明服务端已经跑起来了。接下来在 iOS 或 macOS 客户端的设置里填写同一个地址。
+
+## Docker 镜像
+
+当前可用镜像：
+
+```text
+ghcr.io/lixibi/relayclip-server:latest
+```
+
+项目已经预留 Docker Hub 发布配置。Docker Hub 镜像准备好后，会使用：
+
+```text
+docker.io/lixibi/relayclip-server:latest
+```
+
+在 Docker Hub 镜像正式发布前，建议先使用 GHCR 镜像。
+
+维护者启用 Docker Hub 发布时，需要在 GitHub 仓库里配置：
+
+- Repository variable：`DOCKERHUB_ENABLED=true`
+- Repository secret：`DOCKERHUB_USERNAME`
+- Repository secret：`DOCKERHUB_TOKEN`
+
+## 新手部署指南
+
+### 1. 准备服务器
+
+你需要：
+
+- 一台能访问公网或局域网的服务器。
+- Docker。
+- 一个开放端口，例如 `17006`。
+
+如果服务器没有安装 Docker，可以先参考 Docker 官方安装方式完成安装。
+
+### 2. 启动 RelayClip
+
+```bash
+docker volume create relayclip-data
+docker run -d \
+  --name relayclip-server \
+  --restart unless-stopped \
+  -p 17006:8080 \
+  -v relayclip-data:/data \
+  -e KEYSERVER_DATA_FILE=/data/keys.json \
+  ghcr.io/lixibi/relayclip-server:latest
+```
+
+这个命令会做几件事：
+
+- 创建一个叫 `relayclip-server` 的容器。
+- 把服务器的 `17006` 端口映射到容器里的 `8080`。
+- 把数据放进 Docker volume `relayclip-data`，以后更新容器也不会丢。
+- 容器异常退出或服务器重启后自动恢复。
+
+### 3. 检查是否成功
+
+查看容器：
+
+```bash
+docker ps
+```
+
+查看日志：
+
+```bash
+docker logs relayclip-server
+```
+
+检查健康状态：
+
+```bash
+curl http://127.0.0.1:17006/api/health
+```
+
+浏览器访问：
+
+```text
+http://你的服务器IP:17006
+```
+
+### 4. 配置客户端
+
+在 iOS 或 macOS 客户端里打开设置，填写：
+
+```text
+http://你的服务器IP:17006
+```
+
+如果你配置了域名和 HTTPS，就填写：
+
+```text
+https://clip.example.com
+```
+
+### 5. 更新服务端
+
+更新镜像：
+
+```bash
+docker pull ghcr.io/lixibi/relayclip-server:latest
+docker rm -f relayclip-server
+docker run -d \
+  --name relayclip-server \
+  --restart unless-stopped \
+  -p 17006:8080 \
+  -v relayclip-data:/data \
+  -e KEYSERVER_DATA_FILE=/data/keys.json \
+  ghcr.io/lixibi/relayclip-server:latest
+```
+
+只要继续挂载 `relayclip-data:/data`，历史记录和图片就会保留。
+
+### 6. 备份数据
+
+RelayClip 的数据主要在 Docker volume 里：
+
+- `/data/keys.json`：文本和记录元数据。
+- `/data/assets/`：图片原图。
+- `/data/assets/thumbs/`：缩略图。
+
+可以用下面命令导出备份：
+
+```bash
+docker run --rm \
+  -v relayclip-data:/data \
+  -v "$PWD":/backup \
+  alpine \
+  tar czf /backup/relayclip-data.tar.gz -C /data .
+```
+
+## 配置 HTTPS
+
+公网长期使用建议配置 HTTPS。下面是一个 Caddy 反向代理示例：
 
 ```caddy
 clip.example.com {
@@ -89,36 +183,64 @@ clip.example.com {
 }
 ```
 
-然后客户端填写：
+配置完成后，客户端填写：
 
 ```text
 https://clip.example.com
 ```
 
-局域网或测试环境也可以填写：
+局域网或个人测试环境可以先用 HTTP。
 
-```text
-http://服务器IP:17006
-```
+## 客户端说明
 
-## 客户端如何配合
+### iOS
 
-1. 先部署服务端。
-2. 打开 iOS 或 macOS 客户端，进入设置。
-3. 填写服务器地址，例如 `https://clip.example.com`。
-4. 点“测试连接”，确认能读取远端记录。
-5. 使用“上传”“获取远程”“历史记录”“回收站”等功能。
+iOS 客户端支持：
 
-macOS 客户端的推荐用法：
+- 上传文本和图片。
+- 获取远程最新文本。
+- 历史记录、分类筛选、置顶、隐藏、回收站。
+- 图片缩略图和原图查看。
+- 链接、邮箱、电话识别。
+- 快捷指令：
+  - 上传剪贴板文本
+  - 获取远程文本
+  - 打开快捷面板
+- 帮助页检查 GitHub Release，并打开最新 IPA 下载入口。
 
-- 平时默认关闭自动发送，只把剪贴板变化记录在本机历史。
-- 需要跨设备共享时，点击“一键发送到远程”。
-- 如果希望它像自动同步工具一样工作，再打开“后台自动发送到远程”。
+iOS 不允许普通 App 静默自我安装，所以“更新”会跳转到 GitHub 最新 Release 或 IPA 文件，由用户按当前安装方式完成安装。
 
-快捷指令可以直接调用 RelayClip：
+### macOS
 
-- “上传剪贴板文本”：把传入文本或当前剪贴板文本上传到服务器。
-- “获取远程文本”：获取最新的文本记录并复制到剪贴板。如果最新记录是图片，会继续寻找最新的文本记录。
+macOS 客户端是菜单栏效率工具：
+
+- 默认只记录本机剪贴板，不自动发送远程。
+- 支持手动发送剪贴板或单条历史记录到服务器。
+- 支持自动发送开关。
+- 支持菜单栏快捷复制、浮动窗口、分类筛选、图片缩略图。
+- 支持自定义快捷键打开浮动窗口。
+
+macOS 源码按本机独立目录维护，不放进当前 iOS/server 仓库。
+
+### Web
+
+服务端内置网页客户端。打开服务端地址即可：
+
+- 上传文本。
+- 上传图片。
+- 查看最新内容和历史记录。
+- 复制文本。
+- 预览图片。
+
+## 功能亮点
+
+- 自部署：服务端由你自己运行，客户端只保存你配置的服务器地址。
+- 文本和图片：支持普通文本、multipart 图片上传、缩略图生成、原图读取。
+- 智能分类：文本、图片、链接、邮箱、电话。
+- 内容提取：记录里包含链接、邮箱、电话时，客户端可直接打开网页、发邮件或拨号。
+- 历史管理：置顶、隐藏、本地编辑、回收站、恢复、永久删除、清空回收站。
+- 本地优先：macOS 后台剪贴板监听默认只写本机历史，避免无意上传。
+- 轻量存储：记录元数据保存在 JSON 文件中，图片文件保存在数据目录。
 
 ## 服务端 API
 
@@ -153,24 +275,21 @@ iOS：
 xcodebuild -project RelayClip.xcodeproj -scheme RelayClip -destination 'generic/platform=iOS Simulator' build
 ```
 
-macOS 客户端源码按本机独立目录维护，不放进当前 iOS/server 仓库。
+Docker：
 
-## 数据存储
-
-服务端保持轻量，默认使用 JSON 文件存储记录，图片文件放在数据目录下的 `assets/`。Docker 部署时建议挂载 `/data`，这样容器更新不会丢失数据。
-
-推荐数据目录：
-
-- `/data/keys.json`：记录元数据。
-- `/data/assets/`：图片原图。
-- `/data/assets/thumbs/`：图片缩略图。
+```bash
+docker build -t relayclip-server ./server
+docker run --rm -p 17006:8080 relayclip-server
+```
 
 ## 发布说明
 
 - 项目名称：RelayClip
-- Docker 镜像：`ghcr.io/lixibi/relayclip-server:latest`
+- 当前 GHCR 镜像：`ghcr.io/lixibi/relayclip-server:latest`
+- 预留 Docker Hub 镜像：`docker.io/lixibi/relayclip-server:latest`
 - 默认端口：容器内 `8080`，推荐映射到宿主机 `17006`
 - 推荐部署方式：Docker + 持久化 volume + HTTPS 反向代理
+- Windows 客户端规划：[`docs/windows-plan.md`](docs/windows-plan.md)
 
 ## License
 
