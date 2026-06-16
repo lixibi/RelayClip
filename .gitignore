@@ -1,6 +1,9 @@
 .DS_Store
 DerivedData/
 build/
+macos/.build/
+macos/.swiftpm/
+macos/dist/
 *.xcuserstate
 *.ipa
 *.pid
